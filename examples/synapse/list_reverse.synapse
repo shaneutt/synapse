@@ -1,0 +1,10 @@
+function reverse_helper(List<Int> xs, List<Int> acc) -> List<Int>
+  returns match xs
+    when Nil -> acc
+    when Cons(x, rest) -> reverse_helper(rest, Cons(x, acc))
+
+function reverse(List<Int> xs) -> List<Int>
+  returns reverse_helper(xs, Nil)
+
+function main() -> List<Int>
+  returns reverse(Cons(1, Cons(2, Cons(3, Cons(4, Cons(5, Nil))))))

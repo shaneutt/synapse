@@ -1,0 +1,7 @@
+function gcd(Int a, Int b) -> Int
+  returns match b == 0
+    when true -> a
+    otherwise -> gcd(b, a % b)
+
+function main() -> Int
+  returns gcd(48, 18)

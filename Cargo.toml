@@ -1,0 +1,101 @@
+[workspace]
+resolver = "2"
+members = ["cortex", "intent", "axon"]
+
+[workspace.package]
+authors = ["Shane Utt <shaneutt@linux.com>"]
+edition = "2024"
+rust-version = "1.85.0"
+license = "MIT"
+
+[workspace.lints.rust]
+dead_code = "deny"
+missing_docs = "deny"
+unreachable_pub = "deny"
+unused_imports = "deny"
+unused_variables = "deny"
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
+macro_use_extern_crate = "deny"
+unused_extern_crates = "deny"
+unused_qualifications = "deny"
+unused_macro_rules = "deny"
+non_ascii_idents = "deny"
+noop_method_call = "deny"
+let_underscore_drop = "deny"
+
+[workspace.lints.clippy]
+# Documentation
+doc_markdown = "deny"
+missing_docs_in_private_items = "deny"
+missing_errors_doc = "deny"
+missing_panics_doc = "deny"
+# Allowed: blank line after attributes is intentional style
+empty_line_after_outer_attr = "allow"
+# Idiomatic Rust
+checked_conversions = "deny"
+cloned_instead_of_copied = "deny"
+flat_map_option = "deny"
+manual_assert = "deny"
+manual_let_else = "deny"
+manual_ok_or = "deny"
+manual_string_new = "deny"
+map_unwrap_or = "deny"
+redundant_closure_for_method_calls = "deny"
+unnested_or_patterns = "deny"
+# Borrow hygiene
+needless_borrow = "deny"
+# Code clarity
+if_not_else = "deny"
+match_bool = "deny"
+match_same_arms = "deny"
+mut_mut = "deny"
+range_plus_one = "deny"
+redundant_else = "deny"
+semicolon_if_nothing_returned = "deny"
+uninlined_format_args = "deny"
+unreadable_literal = "deny"
+unused_self = "deny"
+# Import hygiene
+enum_glob_use = "deny"
+wildcard_imports = "deny"
+# String handling
+string_add_assign = "deny"
+str_to_string = "deny"
+# Dev hygiene
+dbg_macro = "deny"
+# Memory and allocation
+implicit_clone = "deny"
+inefficient_to_string = "deny"
+needless_pass_by_value = "deny"
+trivially_copy_pass_by_ref = "deny"
+vec_init_then_push = "deny"
+# API design
+return_self_not_must_use = "deny"
+# API hygiene
+option_option = "deny"
+default_trait_access = "deny"
+expl_impl_clone_on_copy = "deny"
+# Dead code
+unnecessary_wraps = "deny"
+no_effect_underscore_binding = "deny"
+# Code clarity
+items_after_statements = "deny"
+needless_continue = "deny"
+stable_sort_primitive = "deny"
+string_add = "deny"
+string_lit_as_bytes = "deny"
+# Cast safety
+cast_lossless = "deny"
+# Boolean hygiene
+fn_params_excessive_bools = "deny"
+struct_excessive_bools = "deny"
+
+[workspace.dependencies]
+clap = { version = "4.5.37", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
+sha2 = "0.10.9"
+tempfile = "3.19.1"
+thiserror = "2.0.12"
+toml = "0.8.22"
+tracing = "0.1.41"

@@ -1,0 +1,7 @@
+function sum(List<Int> xs) -> Int
+  returns match xs
+    when Nil -> 0
+    when Cons(x, rest) -> x + sum(rest)
+
+function main() -> Int
+  returns sum(Cons(1, Cons(2, Cons(3, Cons(4, Cons(5, Nil))))))

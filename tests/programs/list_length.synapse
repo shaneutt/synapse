@@ -1,0 +1,7 @@
+function length(List<Int> xs) -> Int
+  returns match xs
+    when Nil -> 0
+    when Cons(_, rest) -> 1 + length(rest)
+
+function main() -> Int
+  returns length(Cons(1, Cons(2, Cons(3, Nil))))

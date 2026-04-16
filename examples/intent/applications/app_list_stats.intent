@@ -1,0 +1,2 @@
+application list_stats:
+  intent: create a list of integers 1 through 5, compute the sum, and return it

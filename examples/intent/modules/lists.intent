@@ -1,0 +1,15 @@
+module lists:
+  capability list_sum:
+    input: List<Int> xs
+    output: Int
+    intent: sum all elements using recursion
+
+  capability list_length:
+    input: List<Int> xs
+    output: Int
+    intent: compute length of list
+
+  capability reverse:
+    input: List<Int> xs
+    output: List<Int>
+    intent: reverse list

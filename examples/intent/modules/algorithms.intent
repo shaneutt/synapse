@@ -1,0 +1,10 @@
+module algorithms:
+  capability gcd:
+    input: Int a, Int b
+    output: Int
+    intent: compute gcd using euclidean algorithm
+
+  capability power:
+    input: Int base, Int exp
+    output: Int
+    intent: compute power/exponent

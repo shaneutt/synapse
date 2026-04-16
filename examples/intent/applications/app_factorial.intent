@@ -1,0 +1,2 @@
+application factorial_app:
+  intent: compute the factorial of 10 and return the result

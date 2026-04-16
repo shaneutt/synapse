@@ -1,0 +1,4 @@
+application weather:
+  args:
+    positional: city String
+  intent: fetch today's weather report for the given city from wttr.in and print it to stdout

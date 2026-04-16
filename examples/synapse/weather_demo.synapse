@@ -1,0 +1,11 @@
+function build_url(String city) -> String
+  returns concat("https://wttr.in/", concat(city, "?format=3"))
+
+function fetch_weather(String city) -> String
+  value url = build_url(city)
+  returns http_get(url)
+
+function main() -> Int
+  value report = fetch_weather("Seattle")
+  value _ = print(report)
+  returns 0

@@ -1,0 +1,23 @@
+module list_processing:
+  capability double_all:
+    input: List<Int> xs
+    output: List<Int>
+    intent: map double over list
+
+  capability keep_positive:
+    input: List<Int> xs
+    output: List<Int>
+    intent: filter positive values from list
+
+  capability reverse:
+    input: List<Int> xs
+    output: List<Int>
+    intent: reverse list
+
+  capability list_length:
+    input: List<Int> xs
+    output: Int
+    intent: compute length of list
+
+  pipeline double_then_count:
+    double_all(xs) -> list_length(doubled)

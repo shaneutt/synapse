@@ -1,0 +1,7 @@
+application wordcount:
+  args:
+    flag: --verbose
+    positional: file String
+  environment:
+    - String locale from LANG default en_US
+  intent: read the file, count words, print the count

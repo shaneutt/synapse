@@ -1,0 +1,20 @@
+module statistics:
+  capability list_sum:
+    input: List<Int> xs
+    output: Int
+    intent: sum all elements using recursion
+
+  capability list_length:
+    input: List<Int> xs
+    output: Int
+    intent: compute length of list
+
+  capability find_max:
+    input: List<Int> xs
+    output: Int
+    intent: find maximum in list
+
+  capability find_min:
+    input: List<Int> xs
+    output: Int
+    intent: find minimum in list
