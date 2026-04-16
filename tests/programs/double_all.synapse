@@ -1,0 +1,12 @@
+function double_all(List<Int> xs) -> List<Int>
+  returns match xs
+    when Nil -> Nil
+    when Cons(x, rest) -> Cons(x * 2, double_all(rest))
+
+function sum(List<Int> xs) -> Int
+  returns match xs
+    when Nil -> 0
+    when Cons(x, rest) -> x + sum(rest)
+
+function main() -> Int
+  returns sum(double_all(Cons(1, Cons(2, Cons(3, Nil)))))

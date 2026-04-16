@@ -1,0 +1,21 @@
+[package]
+name = "axon"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true }
+cortex = { path = "../cortex" }
+intent = { path = "../intent" }
+serde = { workspace = true }
+sha2 = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

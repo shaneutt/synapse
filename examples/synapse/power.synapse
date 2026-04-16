@@ -1,0 +1,7 @@
+function power(Int base, Int exp) -> Int
+  returns match exp == 0
+    when true -> 1
+    otherwise -> base * power(base, exp - 1)
+
+function main() -> Int
+  returns power(2, 10)

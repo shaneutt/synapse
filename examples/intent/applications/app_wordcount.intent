@@ -1,0 +1,12 @@
+application wordcount:
+  args:
+    flag: --verbose
+    positional: file String
+  environment:
+    - String locale from LANG default en_US
+  capabilities:
+    builtins: import
+  intent:
+    description: read the file, count words, print the count
+    properties:
+      - uses builtins to print the word count

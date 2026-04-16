@@ -1,0 +1,11 @@
+function fizzbuzz(Int n) -> Int
+  returns match n % 15 == 0
+    when true -> 0
+    otherwise -> match n % 3 == 0
+      when true -> 3
+      otherwise -> match n % 5 == 0
+        when true -> 5
+        otherwise -> n
+
+function main() -> Int
+  returns fizzbuzz(15) + fizzbuzz(9) + fizzbuzz(10) + fizzbuzz(7)

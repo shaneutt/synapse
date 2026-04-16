@@ -1,0 +1,41 @@
+module data_pipeline:
+  capability list_sum:
+    input: List<Int> xs
+    output: Int
+    intent: sum all elements using recursion
+
+  capability list_length:
+    input: List<Int> xs
+    output: Int
+    intent: compute length of list
+
+  capability double_all:
+    input: List<Int> xs
+    output: List<Int>
+    intent: map double over list
+
+  capability keep_positive:
+    input: List<Int> xs
+    output: List<Int>
+    intent: filter positive values from list
+
+  capability reverse:
+    input: List<Int> xs
+    output: List<Int>
+    intent: reverse list
+
+  capability find_max:
+    input: List<Int> xs
+    output: Int
+    intent: find maximum in list
+
+  capability find_min:
+    input: List<Int> xs
+    output: Int
+    intent: find minimum in list
+
+  pipeline filter_double_sum:
+    keep_positive(xs) -> double_all(cleaned) -> list_sum(doubled)
+
+  pipeline filter_then_reverse:
+    keep_positive(xs) -> reverse(cleaned)

@@ -1,0 +1,5 @@
+module math:
+  capability factorial:
+    input: Int n
+    output: Int
+    intent: compute factorial using recursion

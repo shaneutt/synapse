@@ -1,0 +1,79 @@
+(* Synapse formal grammar — source of truth for the language syntax. *)
+
+program        = { import_stmt } declaration+ ;
+
+import_stmt    = "import" import_target NEWLINE ;
+
+import_target  = "builtins"
+               | "rust" IDENTIFIER
+               | IDENTIFIER ;
+
+declaration    = [ "pub" ] ( function_decl | value_decl ) ;
+
+function_decl  = "function" IDENTIFIER
+                 "(" [ params ] ")" "->" type NEWLINE
+                 INDENT func_body DEDENT ;
+
+params         = param { "," param } ;
+param          = type IDENTIFIER ;
+
+type           = "Int" | "Bool" | "String"
+               | "List" "<" type ">" ;
+
+func_body      = statement+ ;
+
+statement      = value_decl
+               | returns_expr ;
+
+value_decl     = "value" IDENTIFIER "=" expression NEWLINE ;
+
+returns_expr   = "returns" expression NEWLINE ;
+
+expression     = match_expr
+               | binary_expr ;
+
+match_expr     = "match" expression NEWLINE when_clause+ ;
+
+when_clause    = INDENT "when" pattern "->" expression NEWLINE
+               | INDENT "otherwise" "->" expression NEWLINE ;
+
+pattern        = literal
+               | IDENTIFIER
+               | "Cons" "(" pattern "," pattern ")"
+               | "Nil"
+               | "_" ;
+
+binary_expr    = unary_expr { binop unary_expr } ;
+
+binop          = "+" | "-" | "*" | "/" | "%"
+               | "==" | "!=" | "<" | ">" | "<=" | ">="
+               | "&&" | "||" ;
+
+unary_expr     = qualified_expr
+               | call_expr
+               | atom ;
+
+qualified_expr = module_name "." IDENTIFIER [ "(" [ arguments ] ")" ] ;
+
+module_name    = IDENTIFIER | "builtins" | "rust" ;
+
+call_expr      = IDENTIFIER "(" [ arguments ] ")" ;
+
+arguments      = expression { "," expression } ;
+
+atom           = literal
+               | IDENTIFIER
+               | "Cons" "(" expression "," expression ")"
+               | "Nil"
+               | "(" expression ")" ;
+
+literal        = INT_LITERAL
+               | BOOL_LITERAL
+               | STRING_LITERAL ;
+
+BOOL_LITERAL   = "true" | "false" ;
+
+(* Lexical tokens produced by indent/dedent tracking. *)
+INDENT         = <increase in leading spaces> ;
+DEDENT         = <decrease in leading spaces> ;
+NEWLINE        = <end of logical line> ;

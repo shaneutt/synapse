@@ -1,0 +1,9 @@
+application math_demo:
+  capabilities:
+    builtins: import
+    math: import ../../synapse/library/math.synapse
+  intent:
+    description: compute factorial of 10 and print it
+    properties:
+      - uses math to compute the factorial
+      - uses builtins to print the result

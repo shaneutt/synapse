@@ -1,0 +1,9 @@
+function collatz(Int n) -> Int
+  returns match n == 1
+    when true -> 0
+    otherwise -> match n % 2 == 0
+      when true -> 1 + collatz(n / 2)
+      otherwise -> 1 + collatz(3 * n + 1)
+
+function main() -> Int
+  returns collatz(27)

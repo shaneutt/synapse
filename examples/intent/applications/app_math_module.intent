@@ -1,0 +1,9 @@
+application math_app:
+  capabilities:
+    builtins: import
+    calculator: new module
+  intent:
+    description: compute factorial of 10 and print it
+    properties:
+      - uses calculator to compute the factorial
+      - uses builtins to print the result

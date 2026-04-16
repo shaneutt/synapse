@@ -1,0 +1,15 @@
+module creative:
+  capability is_even:
+    input: Int n
+    output: Bool
+    intent: return true if n is divisible by 2, false otherwise
+
+  capability abs_value:
+    input: Int n
+    output: Int
+    intent: compute absolute value of n using match on n < 0
+
+  capability countdown:
+    input: Int n
+    output: Int
+    intent: recursively subtract 1 from n until n equals 0 then return 0
