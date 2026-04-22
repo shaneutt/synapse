@@ -23,15 +23,20 @@ pub struct IntentProgram {
     pub modules: Vec<Module>,
 }
 
-/// A high-level application with CLI args, environment vars, and an intent phrase.
+/// A high-level application with CLI args, capabilities, environment vars,
+/// and a structured intent.
 ///
 /// ```
 /// # use intent::ast::*;
 /// let app = Application {
 ///     name: "demo".to_owned(),
 ///     args: ArgsDef::default(),
+///     capabilities: vec![],
 ///     environment: vec![],
-///     intent: "print hello world".to_owned(),
+///     intent: StructuredIntent {
+///         description: "print hello world".to_owned(),
+///         properties: vec![],
+///     },
 /// };
 /// assert_eq!(app.name, "demo");
 /// ```
@@ -41,10 +46,126 @@ pub struct Application {
     pub name: String,
     /// CLI argument definitions.
     pub args: ArgsDef,
+    /// Declared capabilities.
+    pub capabilities: Vec<CapabilityDef>,
     /// Environment variable bindings.
     pub environment: Vec<EnvVar>,
-    /// The intent phrase describing desired behavior.
-    pub intent: String,
+    /// The structured intent describing desired behavior.
+    pub intent: StructuredIntent,
+}
+
+// ---------------------------------------------------------------------------
+// Application Capabilities
+// ---------------------------------------------------------------------------
+
+/// A named capability declaration.
+///
+/// ```
+/// # use intent::ast::*;
+/// let cap = CapabilityDef {
+///     name: "builtins".to_owned(),
+///     kind: CapabilityKind::Import { path: None },
+/// };
+/// assert_eq!(cap.name, "builtins");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityDef {
+    /// The capability name used in property references.
+    pub name: String,
+    /// The kind of capability being declared.
+    pub kind: CapabilityKind,
+}
+
+/// The kind of capability being declared.
+///
+/// ```
+/// # use intent::ast::CapabilityKind;
+/// let k = CapabilityKind::NewModule;
+/// assert_eq!(format!("{k:?}"), "NewModule");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilityKind {
+    /// Bare import resolved by name at build time:
+    /// `builtins` -> built-in functions,
+    /// `<name>.synapse` found -> synapse module,
+    /// `<name>.rs` found -> rust module.
+    /// Optional explicit path overrides auto-resolution.
+    Import {
+        /// Explicit path (`None` means resolve by name).
+        path: Option<String>,
+    },
+    /// Rust crate from Cargo.
+    ImportRustCrate {
+        /// The crate specification.
+        spec: RustCrateSpec,
+    },
+    /// LLM generates a new `.synapse` module.
+    NewModule,
+    /// LLM generates a multi-module `.synapse` crate.
+    NewCrate,
+}
+
+/// Cargo dependency specification.
+///
+/// ```
+/// # use intent::ast::RustCrateSpec;
+/// let spec = RustCrateSpec {
+///     name: "serde_json".to_owned(),
+///     version: Some("1.0.140".to_owned()),
+///     path: None,
+///     git: None,
+/// };
+/// assert_eq!(spec.name, "serde_json");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustCrateSpec {
+    /// Crate name.
+    pub name: String,
+    /// Version string (e.g. `"1.0.140"`).
+    pub version: Option<String>,
+    /// Local path to the crate.
+    pub path: Option<String>,
+    /// Git URL for the crate.
+    pub git: Option<String>,
+}
+
+/// Structured intent with description and properties.
+///
+/// ```
+/// # use intent::ast::*;
+/// let intent = StructuredIntent {
+///     description: "fetch weather".to_owned(),
+///     properties: vec![Property {
+///         capability: "http".to_owned(),
+///         action: "fetch data from wttr.in".to_owned(),
+///     }],
+/// };
+/// assert_eq!(intent.properties.len(), 1);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuredIntent {
+    /// What the application should do.
+    pub description: String,
+    /// Operational properties referencing capabilities.
+    pub properties: Vec<Property>,
+}
+
+/// An operational property referencing a capability.
+///
+/// ```
+/// # use intent::ast::Property;
+/// let prop = Property {
+///     capability: "builtins".to_owned(),
+///     action: "print output to stdout".to_owned(),
+/// };
+/// assert_eq!(prop.capability, "builtins");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Property {
+    /// The capability this property references.
+    pub capability: String,
+    /// What this property does with the capability.
+    pub action: String,
 }
 
 // ---------------------------------------------------------------------------

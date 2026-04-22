@@ -1,2 +1,7 @@
 application factorial_app:
-  intent: compute the factorial of 10 and return the result
+  capabilities:
+    builtins: import
+  intent:
+    description: compute the factorial of 10 and return the result
+    properties:
+      - uses builtins to print the result

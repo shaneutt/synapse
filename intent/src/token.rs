@@ -66,6 +66,22 @@ pub enum TokenKind {
     From,
     /// `default` keyword.
     Default,
+    /// `capabilities` keyword.
+    Capabilities,
+    /// `description` keyword.
+    Description,
+    /// `properties` keyword.
+    Properties,
+    /// `new` keyword.
+    New,
+    /// `import` keyword.
+    Import,
+    /// `crate` keyword.
+    Crate,
+    /// `uses` keyword.
+    Uses,
+    /// `rust` keyword.
+    Rust,
     /// `--` prefix before flag names.
     DashDash,
     /// `:` separator.
@@ -123,6 +139,14 @@ impl TokenKind {
             Self::Environment => "'environment'",
             Self::From => "'from'",
             Self::Default => "'default'",
+            Self::Capabilities => "'capabilities'",
+            Self::Description => "'description'",
+            Self::Properties => "'properties'",
+            Self::New => "'new'",
+            Self::Import => "'import'",
+            Self::Crate => "'crate'",
+            Self::Uses => "'uses'",
+            Self::Rust => "'rust'",
             Self::DashDash => "'--'",
             Self::Colon => "':'",
             Self::Dash => "'-'",

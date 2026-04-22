@@ -5,6 +5,11 @@ string operations. These are recognized by the
 compiler and emitted as inline Rust code (not as
 Synapse function definitions).
 
+Built-in functions require `import builtins` at the
+top of the file. Without this import, calls to
+`print`, `http_get`, or `concat` will produce an
+"undefined function" error.
+
 ## `print`
 
 Print a string to stdout.
@@ -16,6 +21,8 @@ Print a string to stdout.
 | **Emits as** | `println!("{}", arg)` |
 
 ```synapse
+import builtins
+
 function main() -> Int
   value _ = print("hello world")
   returns 0
@@ -34,6 +41,8 @@ Concatenate two strings.
 | **Emits as** | `format!("{}{}", a, b)` |
 
 ```synapse
+import builtins
+
 function greet(String name) -> Int
   value msg = concat("hello, ", name)
   value _ = print(msg)
@@ -51,6 +60,8 @@ Fetch the body of a URL via HTTP GET.
 | **Emits as** | A helper function that shells out to `curl -s` |
 
 ```synapse
+import builtins
+
 function main() -> Int
   value body = http_get("https://example.com")
   value _ = print(body)

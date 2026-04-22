@@ -111,4 +111,46 @@ pub enum IntentError {
         /// The validation error message.
         message: String,
     },
+
+    /// A property references an undeclared capability.
+    #[error("property '{property}' references undeclared capability '{capability}'")]
+    UndefinedCapabilityRef {
+        /// The property action text.
+        property: String,
+        /// The undeclared capability name.
+        capability: String,
+    },
+
+    /// Structured intent has an empty description.
+    #[error("application intent has an empty description")]
+    EmptyDescription,
+
+    /// Structured intent has no properties.
+    #[error("application intent has no properties")]
+    NoProperties,
+
+    /// A duplicate capability name was declared in an application.
+    #[error("duplicate capability name '{name}'")]
+    DuplicateCapability {
+        /// The duplicate capability name.
+        name: String,
+    },
+
+    /// A declared capability is not referenced by any property.
+    #[error("capability '{name}' is declared but not referenced by any property")]
+    UnusedCapability {
+        /// The unreferenced capability name.
+        name: String,
+    },
+
+    /// The LLM generated code with undeclared imports.
+    #[error(
+        "generated code imports '{import}' but no matching capability is declared.\nsuggestion: add '{suggestion}' to capabilities"
+    )]
+    UndeclaredImport {
+        /// The import statement found in the generated code.
+        import: String,
+        /// The suggested capability declaration.
+        suggestion: String,
+    },
 }

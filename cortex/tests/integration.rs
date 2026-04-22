@@ -1,6 +1,7 @@
 //! Integration tests for the cortex compiler pipeline.
 
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -103,4 +104,53 @@ fn cortex_cli_emit() {
     assert!(output.status.success(), "cortex emit should pass");
     let rust = String::from_utf8(output.stdout).unwrap();
     assert!(rust.contains("fn factorial"), "should contain function");
+}
+
+#[test]
+fn multifile_compiles_and_runs() {
+    let example_dir = workspace_root().join("examples/synapse/multifile");
+
+    let math_source = fs::read_to_string(example_dir.join("math.synapse")).expect("cannot read math.synapse");
+    let math_tokens = cortex::lexer::lex(&math_source).expect("lex math");
+    let math_ast = cortex::parser::parse(&math_tokens).expect("parse math");
+    let math_typed = cortex::checker::check(&math_ast).expect("check math");
+    let math_api = cortex::module::extract_api("math", &math_typed);
+    let math_rust = cortex::emitter::emit(&math_typed);
+
+    let mut modules = HashMap::new();
+    modules.insert("math".to_owned(), math_api);
+
+    let main_source = fs::read_to_string(example_dir.join("main.synapse")).expect("cannot read main.synapse");
+    let main_tokens = cortex::lexer::lex(&main_source).expect("lex main");
+    let main_ast = cortex::parser::parse(&main_tokens).expect("parse main");
+    let main_typed = cortex::checker::check_with_modules(&main_ast, &modules).expect("check main with modules");
+    let main_rust = cortex::emitter::emit(&main_typed);
+
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_dir = std::env::temp_dir().join(format!("synapse_multifile_{id}"));
+    fs::create_dir_all(&tmp_dir).unwrap();
+
+    fs::write(tmp_dir.join("math.rs"), &math_rust).unwrap();
+    fs::write(tmp_dir.join("main.rs"), &main_rust).unwrap();
+
+    let tmp_bin = std::env::temp_dir().join(format!("synapse_multifile_bin_{id}"));
+    let status = Command::new("rustc")
+        .arg(tmp_dir.join("main.rs"))
+        .arg("-o")
+        .arg(&tmp_bin)
+        .status()
+        .expect("failed to run rustc");
+    assert!(
+        status.success(),
+        "rustc failed for multifile.\nmath.rs:\n{math_rust}\nmain.rs:\n{main_rust}"
+    );
+
+    let output = Command::new(&tmp_bin).output().expect("failed to run binary");
+    assert!(output.status.success(), "multifile binary failed");
+
+    let result = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+    assert_eq!(result, "3628800", "math.factorial(10) = 3628800");
+
+    drop(fs::remove_dir_all(&tmp_dir));
+    drop(fs::remove_file(&tmp_bin));
 }

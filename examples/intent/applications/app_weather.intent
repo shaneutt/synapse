@@ -1,4 +1,11 @@
 application weather:
   args:
     positional: city String
-  intent: fetch today's weather report for the given city from wttr.in and print it to stdout
+  capabilities:
+    builtins: import
+  intent:
+    description: fetch today's weather report for the given city from wttr.in and print it to stdout
+    properties:
+      - uses builtins to fetch weather data via http_get
+      - uses builtins to build the URL via concat
+      - uses builtins to print the result

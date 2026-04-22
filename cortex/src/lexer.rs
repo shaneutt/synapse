@@ -158,6 +158,7 @@ impl<'src> Lexer<'src> {
             b'(' => Ok(self.single_char(TokenKind::OpenParen)),
             b')' => Ok(self.single_char(TokenKind::CloseParen)),
             b',' => Ok(self.single_char(TokenKind::Comma)),
+            b'.' => Ok(self.single_char(TokenKind::Dot)),
             b':' => Ok(self.single_char(TokenKind::Colon)),
             b'-' => Ok(self.maybe_double(b'>', TokenKind::Arrow, TokenKind::Minus)),
             b'=' => Ok(self.maybe_double(b'=', TokenKind::EqualEqual, TokenKind::Equals)),
@@ -200,12 +201,16 @@ impl<'src> Lexer<'src> {
         };
 
         let kind = match word {
+            "builtins" => TokenKind::Builtins,
             "function" => TokenKind::Function,
-            "value" => TokenKind::Value,
-            "returns" => TokenKind::Returns,
+            "import" => TokenKind::Import,
             "match" => TokenKind::Match,
-            "when" => TokenKind::When,
             "otherwise" => TokenKind::Otherwise,
+            "pub" => TokenKind::Pub,
+            "returns" => TokenKind::Returns,
+            "rust" => TokenKind::Rust,
+            "value" => TokenKind::Value,
+            "when" => TokenKind::When,
             "true" => TokenKind::BoolLit(true),
             "false" => TokenKind::BoolLit(false),
             "Cons" => TokenKind::Cons,
@@ -876,6 +881,73 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn new_keywords() {
+        let tokens = lex_ok("import pub rust builtins\n");
+        assert_eq!(
+            kinds(&tokens),
+            vec![
+                TokenKind::Import,
+                TokenKind::Pub,
+                TokenKind::Rust,
+                TokenKind::Builtins,
+                TokenKind::Newline,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn dot_token() {
+        let tokens = lex_ok("foo.bar\n");
+        assert_eq!(
+            kinds(&tokens),
+            vec![
+                TokenKind::Identifier("foo".to_owned()),
+                TokenKind::Dot,
+                TokenKind::Identifier("bar".to_owned()),
+                TokenKind::Newline,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn import_builtins_line() {
+        let tokens = lex_ok("import builtins\n");
+        assert_eq!(
+            kinds(&tokens),
+            vec![
+                TokenKind::Import,
+                TokenKind::Builtins,
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn import_rust_crate() {
+        let tokens = lex_ok("import rust serde_json\n");
+        assert_eq!(
+            kinds(&tokens),
+            vec![
+                TokenKind::Import,
+                TokenKind::Rust,
+                TokenKind::Identifier("serde_json".to_owned()),
+                TokenKind::Newline,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn pub_function_tokens() {
+        let tokens = lex_ok("pub function f() -> Int\n");
+        assert_eq!(tokens[0].kind, TokenKind::Pub);
+        assert_eq!(tokens[1].kind, TokenKind::Function);
     }
 
     #[test]

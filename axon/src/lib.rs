@@ -8,5 +8,7 @@
 pub mod build;
 /// Incremental build cache with SHA-256 hash tracking.
 pub mod cache;
+/// Capability API resolution for LLM prompts.
+pub mod capabilities;
 /// Project configuration loaded from `synapse.toml`.
 pub mod project;

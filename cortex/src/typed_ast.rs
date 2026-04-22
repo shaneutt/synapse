@@ -1,5 +1,5 @@
 use crate::{
-    ast::{BinOp, Pattern, Type},
+    ast::{BinOp, Import, Pattern, Type},
     token::Span,
 };
 
@@ -16,6 +16,8 @@ use crate::{
 pub struct TypedProgram {
     /// Top-level declarations in source order.
     pub declarations: Vec<TypedDeclaration>,
+    /// Import statements from the source.
+    pub imports: Vec<Import>,
 }
 
 /// A type-checked top-level declaration.
@@ -34,6 +36,8 @@ pub struct TypedFunction {
     pub name: String,
     /// Type-checked body statements.
     pub body: Vec<TypedStatement>,
+    /// Whether this function is declared `pub`.
+    pub is_public: bool,
     /// Type-checked parameters.
     pub params: Vec<TypedParam>,
     /// Declared return type.
@@ -67,6 +71,8 @@ pub enum TypedStatement {
 pub struct TypedValueDecl {
     /// The bound name.
     pub name: String,
+    /// Whether this value is declared `pub`.
+    pub is_public: bool,
     /// Source location.
     pub span: Span,
     /// The inferred type.
@@ -115,6 +121,10 @@ pub enum TypedExprKind {
     BinaryOp(Box<TypedExpr>, BinOp, Box<TypedExpr>),
     /// Function call.
     Call(String, Vec<TypedExpr>),
+    /// Qualified function call (`module.function`).
+    QualifiedCall(String, String, Vec<TypedExpr>),
+    /// Qualified identifier (`module.name`).
+    QualifiedIdentifier(String, String),
     /// Match expression.
     Match(Box<TypedExpr>, Vec<TypedMatchArm>),
     /// List constructor.

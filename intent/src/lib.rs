@@ -10,6 +10,8 @@ pub mod ast;
 pub mod error;
 /// Intent-to-Synapse expansion pipeline.
 pub mod expander;
+/// Guardrails for validating LLM output against declared capabilities.
+pub mod guardrails;
 /// Lexer for intent source files.
 pub mod lexer;
 /// LLM-backed code generation via the `claude` CLI.

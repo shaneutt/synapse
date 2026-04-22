@@ -42,22 +42,30 @@ impl fmt::Display for Span {
 /// [`Token`]: crate::token::Token
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
-    /// `function` keyword.
-    Function,
-    /// `value` keyword.
-    Value,
-    /// `returns` keyword.
-    Returns,
-    /// `match` keyword.
-    Match,
-    /// `when` keyword.
-    When,
-    /// `otherwise` keyword.
-    Otherwise,
+    /// `builtins` keyword.
+    Builtins,
     /// `Cons` constructor keyword.
     Cons,
+    /// `function` keyword.
+    Function,
+    /// `import` keyword.
+    Import,
+    /// `match` keyword.
+    Match,
     /// `Nil` literal keyword.
     Nil,
+    /// `otherwise` keyword.
+    Otherwise,
+    /// `pub` keyword.
+    Pub,
+    /// `returns` keyword.
+    Returns,
+    /// `rust` keyword.
+    Rust,
+    /// `value` keyword.
+    Value,
+    /// `when` keyword.
+    When,
     /// Integer literal.
     IntLit(i64),
     /// Boolean literal (`true` / `false`).
@@ -98,6 +106,8 @@ pub enum TokenKind {
     Arrow,
     /// `,` separator.
     Comma,
+    /// `.` dot for qualified access.
+    Dot,
     /// `(` opening parenthesis.
     OpenParen,
     /// `)` closing parenthesis.
@@ -124,14 +134,18 @@ impl TokenKind {
     /// ```
     pub fn describe(&self) -> &'static str {
         match self {
-            Self::Function => "'function'",
-            Self::Value => "'value'",
-            Self::Returns => "'returns'",
-            Self::Match => "'match'",
-            Self::When => "'when'",
-            Self::Otherwise => "'otherwise'",
+            Self::Builtins => "'builtins'",
             Self::Cons => "'Cons'",
+            Self::Function => "'function'",
+            Self::Import => "'import'",
+            Self::Match => "'match'",
             Self::Nil => "'Nil'",
+            Self::Otherwise => "'otherwise'",
+            Self::Pub => "'pub'",
+            Self::Returns => "'returns'",
+            Self::Rust => "'rust'",
+            Self::Value => "'value'",
+            Self::When => "'when'",
             Self::IntLit(_) => "integer literal",
             Self::BoolLit(_) => "boolean literal",
             Self::StringLit(_) => "string literal",
@@ -152,6 +166,7 @@ impl TokenKind {
             Self::Equals => "'='",
             Self::Arrow => "'->'",
             Self::Comma => "','",
+            Self::Dot => "'.'",
             Self::OpenParen => "'('",
             Self::CloseParen => "')'",
             Self::Colon => "':'",

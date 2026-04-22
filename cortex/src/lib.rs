@@ -14,6 +14,8 @@ pub mod emitter;
 pub mod error;
 /// Lexer: tokenizes Synapse source with indentation tracking.
 pub mod lexer;
+/// Module discovery and API extraction for multi-file programs.
+pub mod module;
 /// Recursive-descent parser: tokens to AST.
 pub mod parser;
 /// Token and span types used by the lexer and parser.

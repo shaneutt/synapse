@@ -10,6 +10,9 @@ mod build;
 /// Build cache.
 #[allow(unreachable_pub)]
 mod cache;
+/// Capability API resolution.
+#[allow(unreachable_pub)]
+mod capabilities;
 /// Project configuration.
 #[allow(unreachable_pub)]
 mod project;

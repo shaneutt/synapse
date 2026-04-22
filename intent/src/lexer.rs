@@ -113,6 +113,8 @@ impl<'src> Lexer<'src> {
             tokens.push(self.lex_token()?);
         }
 
+        self.intent_mode = false;
+
         tokens.push(Token {
             kind: TokenKind::Newline,
             span: self.span(),
@@ -153,6 +155,7 @@ impl<'src> Lexer<'src> {
         match self.peek().unwrap() {
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => Ok(self.lex_word()),
             b'0'..=b'9' => Ok(self.lex_number()),
+            b'.' => Ok(self.lex_path()),
             b'"' => Ok(self.lex_quoted_string()),
             b':' => Ok(self.single_char(TokenKind::Colon)),
             b',' => Ok(self.single_char(TokenKind::Comma)),
@@ -178,6 +181,11 @@ impl<'src> Lexer<'src> {
     // ---------------------------------------------------------------------------
 
     /// Lexes an identifier or keyword token.
+    ///
+    /// After the first pure-alpha word, if the next character is
+    /// `/` or `.` followed by more word characters, continues
+    /// consuming to form a path-like identifier (e.g.
+    /// `lib/utils.synapse`, `../math-lib`).
     fn lex_word(&mut self) -> Token {
         let start_col = self.column;
         let start_pos = self.pos;
@@ -212,13 +220,47 @@ impl<'src> Lexer<'src> {
             "environment" => TokenKind::Environment,
             "from" => TokenKind::From,
             "default" => TokenKind::Default,
-            _ => TokenKind::Identifier(word.to_owned()),
+            "capabilities" => TokenKind::Capabilities,
+            "description" => TokenKind::Description,
+            "properties" => TokenKind::Properties,
+            "new" => TokenKind::New,
+            "import" => TokenKind::Import,
+            "crate" => TokenKind::Crate,
+            "uses" => TokenKind::Uses,
+            "rust" => TokenKind::Rust,
+            _ => {
+                self.extend_path_chars(start_pos);
+                let full = self.source[start_pos..self.pos].to_owned();
+                TokenKind::Identifier(full)
+            },
         };
 
         Token { kind, span }
     }
 
-    /// Lexes a numeric literal as an [`Identifier`] token.
+    /// Extends the current token to include path separators and dots.
+    fn extend_path_chars(&mut self, start_pos: usize) {
+        let _ = start_pos;
+        while matches!(self.peek(), Some(b'/' | b'.')) {
+            let next_after = self.source.as_bytes().get(self.pos + 1).copied();
+            if next_after.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.') {
+                self.advance();
+                while let Some(b) = self.peek() {
+                    if b.is_ascii_alphanumeric() || b == b'_' {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Lexes a numeric or version literal as an [`Identifier`] token.
+    ///
+    /// Handles plain integers (`8080`) and dotted versions (`1.0.140`).
     ///
     /// [`Identifier`]: TokenKind::Identifier
     fn lex_number(&mut self) -> Token {
@@ -227,6 +269,18 @@ impl<'src> Lexer<'src> {
 
         while let Some(b'0'..=b'9') = self.peek() {
             self.advance();
+        }
+
+        while self.peek() == Some(b'.') {
+            let next_after = self.source.as_bytes().get(self.pos + 1).copied();
+            if next_after.is_some_and(|b| b.is_ascii_digit()) {
+                self.advance();
+                while let Some(b'0'..=b'9') = self.peek() {
+                    self.advance();
+                }
+            } else {
+                break;
+            }
         }
 
         let text = self.source[start_pos..self.pos].to_owned();
@@ -292,6 +346,29 @@ impl<'src> Lexer<'src> {
         }
     }
 
+    /// Lexes a path starting with `.` (e.g. `../math-lib`).
+    fn lex_path(&mut self) -> Token {
+        let start_col = self.column;
+        let start_pos = self.pos;
+
+        while let Some(b) = self.peek() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'/' | b'-') {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let text = self.source[start_pos..self.pos].to_owned();
+        Token {
+            kind: TokenKind::Identifier(text),
+            span: Span {
+                line: self.line,
+                column: start_col,
+            },
+        }
+    }
+
     /// Captures all remaining text on the line as a [`FreeText`] token.
     fn lex_free_text(&mut self) -> Token {
         let span = self.span();
@@ -324,10 +401,11 @@ impl<'src> Lexer<'src> {
         Token { kind, span }
     }
 
-    /// Sets `intent_mode` if the most recently produced keyword was `intent`.
+    /// Sets `intent_mode` if the most recently produced keyword was
+    /// `intent` or `description`.
     fn check_intent_mode(&mut self) {
         let before_colon = self.source[..self.pos - 1].trim_end();
-        if before_colon.ends_with("intent") {
+        if before_colon.ends_with("intent") || before_colon.ends_with("description") {
             self.intent_mode = true;
         }
     }

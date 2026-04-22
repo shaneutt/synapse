@@ -14,20 +14,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-    - name: Install nightly toolchain
-      run: |
-        rustup toolchain install nightly
-        rustup component add rustfmt --toolchain nightly
+      - name: Install nightly toolchain
+        run: |
+          rustup toolchain install nightly
+          rustup component add rustfmt --toolchain nightly
 
-    - name: Install audit tools
-      run: |
-        cargo install cargo-audit
-        cargo install cargo-deny
+      - name: Install audit tools
+        run: |
+          cargo install cargo-audit
+          cargo install cargo-deny
 
-    - name: Build
-      run: make build
+      - name: Build
+        run: make build
 
-    - name: Check
-      run: make check
+      - name: Check
+        run: make check

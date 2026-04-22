@@ -1,2 +1,7 @@
 application list_stats:
-  intent: create a list of integers 1 through 5, compute the sum, and return it
+  capabilities:
+    builtins: import
+  intent:
+    description: create a list of integers 1 through 5, compute the sum, and return it
+    properties:
+      - uses builtins to print the computed sum

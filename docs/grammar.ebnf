@@ -1,9 +1,14 @@
 (* Synapse formal grammar — source of truth for the language syntax. *)
 
-program        = declaration+ ;
+program        = { import_stmt } declaration+ ;
 
-declaration    = function_decl
-               | value_decl ;
+import_stmt    = "import" import_target NEWLINE ;
+
+import_target  = "builtins"
+               | "rust" IDENTIFIER
+               | IDENTIFIER ;
+
+declaration    = [ "pub" ] ( function_decl | value_decl ) ;
 
 function_decl  = "function" IDENTIFIER
                  "(" [ params ] ")" "->" type NEWLINE
@@ -44,8 +49,13 @@ binop          = "+" | "-" | "*" | "/" | "%"
                | "==" | "!=" | "<" | ">" | "<=" | ">="
                | "&&" | "||" ;
 
-unary_expr     = call_expr
+unary_expr     = qualified_expr
+               | call_expr
                | atom ;
+
+qualified_expr = module_name "." IDENTIFIER [ "(" [ arguments ] ")" ] ;
+
+module_name    = IDENTIFIER | "builtins" | "rust" ;
 
 call_expr      = IDENTIFIER "(" [ arguments ] ")" ;
 

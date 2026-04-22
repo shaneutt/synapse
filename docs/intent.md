@@ -14,16 +14,22 @@ templates or LLM generation.
 ## Applications
 
 The highest level. Describes a runnable program with
-CLI arguments, environment variables, and a purpose.
+CLI arguments, capabilities, environment variables,
+and a structured intent.
 
 ```yaml
 application wordcount:
   args:
     flag: --verbose
     positional: file String
+  capabilities:
+    builtins: import
   environment:
     - String locale from LANG default en_US
-  intent: read the file, count words, print the count
+  intent:
+    description: read the file, count words, print the count
+    properties:
+      - uses builtins to print the word count
 ```
 
 ### Args
@@ -34,6 +40,81 @@ application wordcount:
 | Boolean flag | `flag: --verbose` | Absent = false |
 | Typed flag | `flag: --port Int default 8080` | Required if no default |
 | Positional | `positional: file String` | Required, ordered |
+
+### Capabilities
+
+Every dependency an application uses must be declared.
+
+| Declaration | Meaning |
+| ----------- | ------- |
+| `import` | Resolved by name: builtins, `.synapse` or `.rs` in `src/` |
+| `import <path>` | Explicit path to `.synapse` or `.rs` file |
+| `import rust crate [version] [path <p>] [git <url>]` | Cargo dependency |
+| `new module` | LLM generates a new `.synapse` module |
+| `new crate` | LLM generates a multi-module crate |
+
+### Structured Intent
+
+The `intent:` block contains a `description` and
+`properties` that reference declared capabilities.
+
+```yaml
+intent:
+  description: fetch weather for a city and print it
+  properties:
+    - uses builtins to print output to stdout
+    - uses http to fetch data from wttr.in
+```
+
+Validation rules:
+1. Description must be non-empty.
+2. At least one property required.
+3. Every `uses <name>` must reference a declared
+   capability.
+4. Every declared capability should be referenced by
+   at least one property (warning if unused).
+5. No duplicate capability names.
+
+For backward compatibility, `intent: <free text>` on
+a single line is still accepted for applications
+without capabilities.
+
+### Importing Synapse Modules
+
+Use `import <path>` to declare a pre-written `.synapse`
+file as a dependency, or bare `import` to resolve by
+name (looks in `src/`). The build tool compiles it
+through cortex, extracts its public API, and makes it
+available to the LLM and type checker.
+
+```yaml
+application math_demo:
+  capabilities:
+    builtins: import
+    math: import lib/math.synapse
+  intent:
+    description: compute factorial of 10 and print it
+    properties:
+      - uses math to compute the factorial
+      - uses builtins to print the result
+```
+
+The path is relative to the project directory. The
+module name (here `math`) becomes the qualified prefix
+in generated code: `math.factorial(10)`.
+
+The module file must use `pub` on any functions the
+application needs to call:
+
+```synapse
+pub function factorial(Int n) -> Int
+  returns match n
+    when 0 -> 1
+    otherwise -> n * factorial(n - 1)
+```
+
+Private functions (without `pub`) are internal to the
+module and invisible to importers.
 
 ### Environment
 

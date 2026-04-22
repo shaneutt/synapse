@@ -1,10 +1,105 @@
 use crate::{
-    ast::{BinOp, Pattern, Type},
+    ast::{BinOp, Import, Pattern, Type},
     typed_ast::{
         TypedDeclaration, TypedExpr, TypedExprKind, TypedFunction, TypedMatchArm, TypedParam, TypedProgram,
         TypedStatement, TypedValueDecl,
     },
 };
+
+// ---------------------------------------------------------------------------
+// Cargo.toml Generation
+// ---------------------------------------------------------------------------
+
+/// Specification for a Rust crate dependency in the generated `Cargo.toml`.
+///
+/// Maps directly to the `[dependencies]` entry format in `Cargo.toml`:
+/// version-only, path-only, git-only, or a combination.
+///
+/// ```
+/// # use cortex::emitter::CrateSpec;
+/// let spec = CrateSpec {
+///     name: "serde_json".to_owned(),
+///     version: Some("1.0.140".to_owned()),
+///     path: None,
+///     git: None,
+/// };
+/// assert_eq!(spec.name, "serde_json");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrateSpec {
+    /// Crate name (used as the dependency key).
+    pub name: String,
+    /// Version string (e.g. `"1.0.140"`).
+    pub version: Option<String>,
+    /// Local filesystem path to the crate.
+    pub path: Option<String>,
+    /// Git repository URL for the crate.
+    pub git: Option<String>,
+}
+
+/// Generates a `Cargo.toml` for the build target.
+///
+/// Produces a complete `Cargo.toml` with `[package]` and
+/// `[dependencies]` sections. Each [`CrateSpec`] maps to a
+/// dependency entry using the appropriate TOML format.
+///
+/// ```
+/// # use cortex::emitter::{generate_cargo_toml, CrateSpec};
+/// let toml = generate_cargo_toml(
+///     "weather",
+///     &[CrateSpec {
+///         name: "serde_json".to_owned(),
+///         version: Some("1.0.140".to_owned()),
+///         path: None,
+///         git: None,
+///     }],
+/// );
+/// assert!(toml.contains("serde_json = \"1.0.140\""));
+/// assert!(toml.contains("name = \"weather\""));
+/// ```
+///
+/// [`CrateSpec`]: crate::emitter::CrateSpec
+pub fn generate_cargo_toml(project_name: &str, rust_crates: &[CrateSpec]) -> String {
+    let mut out = String::new();
+    out.push_str("[package]\n");
+    out.push_str(&format!("name = \"{project_name}\"\n"));
+    out.push_str("version = \"0.1.0\"\n");
+    out.push_str("edition = \"2024\"\n");
+
+    if !rust_crates.is_empty() {
+        out.push_str("\n[dependencies]\n");
+        for spec in rust_crates {
+            out.push_str(&format_dep_entry(spec));
+        }
+    }
+
+    out
+}
+
+/// Formats a single dependency entry for `Cargo.toml`.
+fn format_dep_entry(spec: &CrateSpec) -> String {
+    let has_version = spec.version.is_some();
+    let has_path = spec.path.is_some();
+    let has_git = spec.git.is_some();
+    let field_count = usize::from(has_version) + usize::from(has_path) + usize::from(has_git);
+
+    if field_count == 1 && has_version {
+        return format!("{} = \"{}\"\n", spec.name, spec.version.as_ref().unwrap());
+    }
+
+    let mut parts = Vec::new();
+    if let Some(v) = &spec.version {
+        parts.push(format!("version = \"{v}\""));
+    }
+    if let Some(p) = &spec.path {
+        parts.push(format!("path = \"{p}\""));
+    }
+    if let Some(g) = &spec.git {
+        parts.push(format!("git = \"{g}\""));
+    }
+
+    format!("{} = {{ {} }}\n", spec.name, parts.join(", "))
+}
 
 /// Emits a [`TypedProgram`] as valid Rust source code.
 ///
@@ -165,6 +260,7 @@ struct Emitter {
 impl Emitter {
     /// Emits a complete program with prelude and optional main wrapper.
     fn emit_program(&mut self, program: &TypedProgram) {
+        self.emit_mod_declarations(program);
         self.emit_prelude(program);
         self.emit_builtins(program);
 
@@ -189,6 +285,7 @@ impl Emitter {
 
     /// Emits a program with an application-level `main()` for arg parsing.
     fn emit_program_with_app(&mut self, program: &TypedProgram, app: &AppMeta) {
+        self.emit_mod_declarations(program);
         self.emit_prelude(program);
         self.emit_builtins(program);
 
@@ -203,6 +300,28 @@ impl Emitter {
         }
 
         self.emit_app_main(program, app);
+    }
+
+    /// Emits `mod <name>;` declarations for Synapse modules and
+    /// `use <name>;` for Rust crate imports.
+    fn emit_mod_declarations(&mut self, program: &TypedProgram) {
+        let mut emitted = false;
+        for import in &program.imports {
+            match import {
+                Import::SynapseModule(name) => {
+                    self.line(&format!("mod {name};"));
+                    emitted = true;
+                },
+                Import::RustCrate(name) => {
+                    self.line(&format!("use {name};"));
+                    emitted = true;
+                },
+                Import::Builtins => {},
+            }
+        }
+        if emitted {
+            self.line("");
+        }
     }
 
     /// Emits the List enum and Display impl if any function uses list types.
@@ -264,13 +383,18 @@ impl Emitter {
         } else {
             &func.name
         };
+        let vis = if func.is_public && func.name != "main" {
+            "pub "
+        } else {
+            ""
+        };
         let params: Vec<String> = func
             .params
             .iter()
             .map(|p| format!("{}: {}", p.name, type_to_rust(&p.ty)))
             .collect();
         let ret = type_to_rust(&func.return_type);
-        self.line(&format!("fn {name}({}) -> {ret} {{", params.join(", ")));
+        self.line(&format!("{vis}fn {name}({}) -> {ret} {{", params.join(", ")));
         self.indent();
 
         for (i, stmt) in func.body.iter().enumerate() {
@@ -328,6 +452,23 @@ impl Emitter {
                 self.output.push(')');
             },
             TypedExprKind::Call(name, args) => self.emit_call(name, args),
+            TypedExprKind::QualifiedCall(module, name, args) => {
+                if module == "builtins" {
+                    self.emit_call(name, args);
+                } else {
+                    self.output.push_str(&format!("{module}::{name}("));
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.emit_expr(arg);
+                    }
+                    self.output.push(')');
+                }
+            },
+            TypedExprKind::QualifiedIdentifier(module, name) => {
+                self.output.push_str(&format!("{module}::{name}"));
+            },
             TypedExprKind::Match(scrutinee, arms) => {
                 self.output.push_str("match ");
                 self.emit_expr(scrutinee);
@@ -683,6 +824,10 @@ impl Emitter {
 
     /// Emits Rust implementations for built-in functions used in the program.
     fn emit_builtins(&mut self, program: &TypedProgram) {
+        let has_builtins = program.imports.iter().any(|i| matches!(i, Import::Builtins));
+        if !has_builtins {
+            return;
+        }
         if self.uses_builtin(program, "http_get") {
             self.line("fn __builtin_http_get(url: String) -> String {");
             self.indent();
@@ -722,6 +867,7 @@ impl Emitter {
     fn expr_uses(&self, expr: &TypedExpr, name: &str) -> bool {
         match &expr.kind {
             TypedExprKind::Call(n, args) => n == name || args.iter().any(|a| self.expr_uses(a, name)),
+            TypedExprKind::QualifiedCall(_, n, args) => n == name || args.iter().any(|a| self.expr_uses(a, name)),
             TypedExprKind::BinaryOp(l, _, r) => self.expr_uses(l, name) || self.expr_uses(r, name),
             TypedExprKind::Match(s, arms) => {
                 self.expr_uses(s, name) || arms.iter().any(|a| self.expr_uses(&a.body, name))
@@ -1099,6 +1245,157 @@ mod tests {
             rust.contains("let result = synapse_main();"),
             "direct call with no args:\n{rust}"
         );
+    }
+
+    #[test]
+    fn emit_pub_function() {
+        let rust = compile("pub function helper() -> Int\n  returns 42\nfunction main() -> Int\n  returns helper()\n");
+        assert!(rust.contains("pub fn helper() -> i64"), "pub fn:\n{rust}");
+        assert!(rust.contains("fn synapse_main() -> i64"), "main is not pub:\n{rust}");
+    }
+
+    #[test]
+    fn emit_private_function() {
+        let rust = compile("function helper() -> Int\n  returns 42\nfunction main() -> Int\n  returns helper()\n");
+        assert!(rust.contains("fn helper() -> i64"), "private fn has no pub:\n{rust}");
+        assert!(
+            !rust.contains("pub fn helper"),
+            "should not contain pub fn helper:\n{rust}"
+        );
+    }
+
+    #[test]
+    fn emit_builtins_with_import() {
+        let rust = compile("import builtins\nfunction main() -> Int\n  value _ = print(\"hello\")\n  returns 0\n");
+        assert!(rust.contains("println!"), "builtins emitted with import:\n{rust}");
+    }
+
+    #[test]
+    fn emit_no_builtins_without_import() {
+        let rust = compile("function f() -> Int\n  returns 42\n");
+        assert!(
+            !rust.contains("__builtin_http_get"),
+            "no builtins without import:\n{rust}"
+        );
+    }
+
+    #[test]
+    fn emit_qualified_builtin_call() {
+        let rust =
+            compile("import builtins\nfunction main() -> Int\n  value _ = builtins.print(\"hi\")\n  returns 0\n");
+        assert!(
+            rust.contains("println!"),
+            "qualified builtin call emits as inline:\n{rust}"
+        );
+    }
+
+    #[test]
+    fn emit_rust_crate_import() {
+        let rust = compile("import rust serde_json\nfunction f() -> Int\n  returns 42\n");
+        assert!(
+            rust.contains("use serde_json;"),
+            "rust crate import emits use statement:\n{rust}"
+        );
+        assert!(
+            !rust.contains("mod serde_json;"),
+            "rust crate import must not emit mod:\n{rust}"
+        );
+    }
+
+    #[test]
+    fn cargo_toml_version_only() {
+        let toml = generate_cargo_toml(
+            "demo",
+            &[CrateSpec {
+                name: "serde_json".to_owned(),
+                version: Some("1.0.140".to_owned()),
+                path: None,
+                git: None,
+            }],
+        );
+        assert!(toml.contains("name = \"demo\""), "package name:\n{toml}");
+        assert!(toml.contains("serde_json = \"1.0.140\""), "version-only dep:\n{toml}");
+    }
+
+    #[test]
+    fn cargo_toml_path_only() {
+        let toml = generate_cargo_toml(
+            "demo",
+            &[CrateSpec {
+                name: "mylib".to_owned(),
+                version: None,
+                path: Some("../mylib".to_owned()),
+                git: None,
+            }],
+        );
+        assert!(
+            toml.contains("mylib = { path = \"../mylib\" }"),
+            "path-only dep:\n{toml}"
+        );
+    }
+
+    #[test]
+    fn cargo_toml_git_only() {
+        let toml = generate_cargo_toml(
+            "demo",
+            &[CrateSpec {
+                name: "foo".to_owned(),
+                version: None,
+                path: None,
+                git: Some("https://github.com/x/foo".to_owned()),
+            }],
+        );
+        assert!(
+            toml.contains("foo = { git = \"https://github.com/x/foo\" }"),
+            "git-only dep:\n{toml}"
+        );
+    }
+
+    #[test]
+    fn cargo_toml_version_and_git() {
+        let toml = generate_cargo_toml(
+            "demo",
+            &[CrateSpec {
+                name: "bar".to_owned(),
+                version: Some("0.1.0".to_owned()),
+                path: None,
+                git: Some("https://github.com/x/bar".to_owned()),
+            }],
+        );
+        assert!(
+            toml.contains("bar = { version = \"0.1.0\", git = \"https://github.com/x/bar\" }"),
+            "combined dep:\n{toml}"
+        );
+    }
+
+    #[test]
+    fn cargo_toml_no_deps() {
+        let toml = generate_cargo_toml("demo", &[]);
+        assert!(toml.contains("name = \"demo\""), "has package name:\n{toml}");
+        assert!(!toml.contains("[dependencies]"), "no deps section when empty:\n{toml}");
+    }
+
+    #[test]
+    fn cargo_toml_multiple_deps() {
+        let toml = generate_cargo_toml(
+            "demo",
+            &[
+                CrateSpec {
+                    name: "serde".to_owned(),
+                    version: Some("1.0.219".to_owned()),
+                    path: None,
+                    git: None,
+                },
+                CrateSpec {
+                    name: "mylib".to_owned(),
+                    version: None,
+                    path: Some("../mylib".to_owned()),
+                    git: None,
+                },
+            ],
+        );
+        assert!(toml.contains("serde = \"1.0.219\""), "first dep:\n{toml}");
+        assert!(toml.contains("mylib = { path = \"../mylib\" }"), "second dep:\n{toml}");
     }
 
     // ---------------------------------------------------------------------------

@@ -178,4 +178,35 @@ pub enum TypeError {
         /// The duplicate function name.
         name: String,
     },
+
+    /// An import references a module that does not exist.
+    #[error("{span}: unknown module '{name}'")]
+    UnknownModule {
+        /// Error location.
+        span: Span,
+        /// The unknown module name.
+        name: String,
+    },
+
+    /// A qualified call references a function not exported by the module.
+    #[error("{span}: module '{module}' has no function '{function}'")]
+    UnknownModuleFunction {
+        /// Error location.
+        span: Span,
+        /// The module name.
+        module: String,
+        /// The function name.
+        function: String,
+    },
+
+    /// A qualified call targets a non-public function in another module.
+    #[error("{span}: function '{function}' in module '{module}' is not public")]
+    ModuleVisibility {
+        /// Error location.
+        span: Span,
+        /// The module name.
+        module: String,
+        /// The private function name.
+        function: String,
+    },
 }

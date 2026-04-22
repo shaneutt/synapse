@@ -1,0 +1,4 @@
+pub function factorial(Int n) -> Int
+  returns match n
+    when 0 -> 1
+    otherwise -> n * factorial(n - 1)

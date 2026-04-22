@@ -1,3 +1,5 @@
+import builtins
+
 function build_url(String city) -> String
   returns concat("https://wttr.in/", concat(city, "?format=3"))
 

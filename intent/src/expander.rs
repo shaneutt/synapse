@@ -1,7 +1,12 @@
+use std::collections::HashMap;
+
+use cortex::module::ModuleApi;
+
 use crate::{
-    ast::{Capability, IntentProgram, Pipeline, PipelineStep},
+    ast::{Capability, CapabilityKind, IntentProgram, Pipeline, PipelineStep},
     error::IntentError,
-    llm, templates, validator,
+    llm::{self, ExpandedApplication},
+    templates, validator,
 };
 
 /// Expands an [`IntentProgram`] into valid `.synapse` source code
@@ -37,7 +42,8 @@ use crate::{
 /// [`IntentError`]: crate::error::IntentError
 /// [`IntentError::NoTemplateMatch`]: crate::error::IntentError::NoTemplateMatch
 pub fn expand(program: &IntentProgram) -> Result<String, IntentError> {
-    expand_core(program, false)
+    let expanded = expand_core(program, false, &HashMap::new())?;
+    Ok(expanded.main_synapse)
 }
 
 /// Expands using templates first, falling back to the `claude` CLI
@@ -57,15 +63,64 @@ pub fn expand(program: &IntentProgram) -> Result<String, IntentError> {
 ///
 /// [`IntentError`]: crate::error::IntentError
 pub fn expand_with_llm(program: &IntentProgram) -> Result<String, IntentError> {
-    expand_core(program, true)
+    let expanded = expand_core(program, true, &HashMap::new())?;
+    Ok(expanded.main_synapse)
 }
 
-/// Core expansion logic shared by [`expand`] and [`expand_with_llm`].
+/// Expands an [`IntentProgram`] with resolved capability APIs.
+///
+/// The APIs are forwarded to the LLM prompt so it sees exactly
+/// which functions each capability provides.
+///
+/// # Errors
+///
+/// Returns [`IntentError`] if expansion fails.
+///
+/// [`IntentProgram`]: crate::ast::IntentProgram
+/// [`IntentError`]: crate::error::IntentError
+pub fn expand_with_llm_and_apis(
+    program: &IntentProgram,
+    apis: &HashMap<String, ModuleApi>,
+) -> Result<String, IntentError> {
+    let expanded = expand_core(program, true, apis)?;
+    Ok(expanded.main_synapse)
+}
+
+/// Expands an [`IntentProgram`] with LLM support, returning an
+/// [`ExpandedApplication`] that includes both the main `.synapse`
+/// source and any generated module sources.
+///
+/// For applications with `new module` capabilities, each module
+/// is generated via a separate LLM call before the main expansion.
+///
+/// # Errors
+///
+/// Returns [`IntentError`] if expansion fails.
+///
+/// [`IntentProgram`]: crate::ast::IntentProgram
+/// [`ExpandedApplication`]: crate::llm::ExpandedApplication
+/// [`IntentError`]: crate::error::IntentError
+pub fn expand_with_llm_and_apis_full(
+    program: &IntentProgram,
+    apis: &HashMap<String, ModuleApi>,
+) -> Result<ExpandedApplication, IntentError> {
+    expand_core(program, true, apis)
+}
+
+/// Core expansion logic shared by [`expand`], [`expand_with_llm`],
+/// [`expand_with_llm_and_apis`], and [`expand_with_llm_and_apis_full`].
 ///
 /// Applications are expanded directly to `.synapse` in a single
-/// LLM call. Modules go through per-capability template/LLM
-/// expansion as before.
-fn expand_core(program: &IntentProgram, use_llm: bool) -> Result<String, IntentError> {
+/// LLM call. When `new module` capabilities are present, each is
+/// generated via a separate LLM call first, and its API is injected
+/// into the main application prompt.
+///
+/// Modules go through per-capability template/LLM expansion as before.
+fn expand_core(
+    program: &IntentProgram,
+    use_llm: bool,
+    apis: &HashMap<String, ModuleApi>,
+) -> Result<ExpandedApplication, IntentError> {
     tracing::debug!(use_llm, "expanding intent program");
 
     if !program.applications.is_empty() && !use_llm {
@@ -77,7 +132,7 @@ fn expand_core(program: &IntentProgram, use_llm: bool) -> Result<String, IntentE
     if !program.applications.is_empty() {
         let app = &program.applications[0];
         tracing::info!(name = %app.name, "expanding application directly to .synapse");
-        return llm::expand_application(app);
+        return expand_application_with_modules(app, apis);
     }
 
     let errors = validator::validate(program);
@@ -113,7 +168,92 @@ fn expand_core(program: &IntentProgram, use_llm: bool) -> Result<String, IntentE
         verify_compiles(&output)?;
     }
 
-    Ok(output)
+    Ok(ExpandedApplication {
+        main_synapse: output,
+        modules: HashMap::new(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Application with New Module Expansion
+// ---------------------------------------------------------------------------
+
+/// Expands an application, generating separate modules for `new module`
+/// capabilities before generating the main `.synapse` source.
+///
+/// For each `new module` capability:
+/// 1. Generate the module via a separate LLM call
+/// 2. Extract the module's public API via cortex
+/// 3. Add the API to the prompt for the main expansion
+///
+/// The main `.synapse` uses `import <name>` and qualified calls.
+fn expand_application_with_modules(
+    app: &crate::ast::Application,
+    base_apis: &HashMap<String, ModuleApi>,
+) -> Result<ExpandedApplication, IntentError> {
+    let new_module_caps: Vec<&str> = app
+        .capabilities
+        .iter()
+        .filter(|c| c.kind == CapabilityKind::NewModule)
+        .map(|c| c.name.as_str())
+        .collect();
+
+    if new_module_caps.is_empty() {
+        tracing::info!(name = %app.name, "no new module capabilities, expanding directly");
+        let main_synapse = llm::expand_application(app, base_apis)?;
+        return Ok(ExpandedApplication {
+            main_synapse,
+            modules: HashMap::new(),
+        });
+    }
+
+    tracing::info!(
+        name = %app.name,
+        modules = ?new_module_caps,
+        "expanding new module capabilities before main application"
+    );
+
+    let mut merged_apis = base_apis.clone();
+    let mut generated_modules = HashMap::new();
+
+    for module_name in &new_module_caps {
+        tracing::info!(module = %module_name, "generating new module");
+
+        let module_source = llm::expand_new_module(module_name, &app.intent.properties, &merged_apis)?;
+
+        let api = extract_module_api(module_name, &module_source)?;
+        tracing::info!(
+            module = %module_name,
+            functions = api.functions.len(),
+            "extracted API from generated module"
+        );
+
+        merged_apis.insert((*module_name).to_owned(), api);
+        generated_modules.insert((*module_name).to_owned(), module_source);
+    }
+
+    tracing::info!(name = %app.name, "expanding main application with generated module APIs");
+    let main_synapse = llm::expand_application(app, &merged_apis)?;
+
+    Ok(ExpandedApplication {
+        main_synapse,
+        modules: generated_modules,
+    })
+}
+
+/// Extracts a [`ModuleApi`] from generated `.synapse` source code.
+///
+/// Compiles the source through cortex and uses [`extract_api`] to
+/// enumerate `pub` function signatures.
+///
+/// [`ModuleApi`]: cortex::module::ModuleApi
+/// [`extract_api`]: cortex::module::extract_api
+fn extract_module_api(module_name: &str, source: &str) -> Result<ModuleApi, IntentError> {
+    let typed = cortex::compile_check(source).map_err(|e| IntentError::LlmOutputInvalid {
+        name: module_name.to_owned(),
+        message: e.to_string(),
+    })?;
+    Ok(cortex::module::extract_api(module_name, &typed))
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +548,67 @@ module math:
         let synapse = expand_intent(source);
         assert!(synapse.contains("function factorial"), "has factorial: {synapse}");
         assert!(synapse.contains("function fibonacci"), "has fibonacci: {synapse}");
+    }
+
+    #[test]
+    fn application_without_new_modules_returns_empty_modules_map() {
+        let program = IntentProgram {
+            applications: vec![],
+            types: vec![],
+            modules: vec![crate::ast::Module {
+                name: "m".to_owned(),
+                capabilities: vec![Capability {
+                    name: "factorial".to_owned(),
+                    inputs: vec![crate::ast::Param {
+                        name: "n".to_owned(),
+                        ty: "Int".to_owned(),
+                    }],
+                    intent: "compute factorial using recursion".to_owned(),
+                    output: Some("Int".to_owned()),
+                }],
+                pipelines: vec![],
+            }],
+        };
+        let expanded = expand_core(&program, false, &HashMap::new()).unwrap();
+        assert!(
+            expanded.modules.is_empty(),
+            "non-application expansion produces no modules"
+        );
+        assert!(
+            expanded.main_synapse.contains("function factorial"),
+            "main synapse contains factorial: {}",
+            expanded.main_synapse
+        );
+    }
+
+    #[test]
+    fn extract_module_api_from_source() {
+        let source = "pub function add(Int a, Int b) -> Int\n  returns a + b\n";
+        let api = extract_module_api("calc", source).unwrap();
+        assert_eq!(api.name, "calc", "module name matches");
+        assert_eq!(api.functions.len(), 1, "one pub function extracted");
+        assert_eq!(api.functions[0].name, "add", "function name is add");
+        assert_eq!(api.functions[0].params.len(), 2, "add takes 2 params");
+    }
+
+    #[test]
+    fn extract_module_api_excludes_private() {
+        let source = "\
+pub function visible(Int x) -> Int
+  returns x + 1
+
+function hidden(Int x) -> Int
+  returns x - 1
+";
+        let api = extract_module_api("mod", source).unwrap();
+        assert_eq!(api.functions.len(), 1, "only pub function extracted");
+        assert_eq!(api.functions[0].name, "visible");
+    }
+
+    #[test]
+    fn extract_module_api_invalid_source_errors() {
+        let result = extract_module_api("bad", "this is not valid synapse");
+        assert!(result.is_err(), "invalid source should produce error");
     }
 
     // ---------------------------------------------------------------------------

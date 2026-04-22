@@ -9,6 +9,10 @@ use crate::{ast::IntentProgram, error::IntentError};
 /// 2. Pipeline steps reference defined capabilities.
 /// 3. All type references resolve to defined or built-in types.
 /// 4. Every capability has an intent phrase.
+/// 5. Application capability declarations are unique.
+/// 6. Application property references resolve to declared capabilities.
+/// 7. Application descriptions are non-empty.
+/// 8. Applications have at least one property (when structured).
 ///
 /// # Errors
 ///
@@ -36,6 +40,7 @@ pub fn validate(program: &IntentProgram) -> Vec<IntentError> {
     check_pipeline_references(program, &mut errors);
     check_type_references(program, &mut errors);
     check_missing_intents(program, &mut errors);
+    check_application_capabilities(program, &mut errors);
 
     errors
 }
@@ -158,6 +163,53 @@ fn check_missing_intents(program: &IntentProgram, errors: &mut Vec<IntentError>)
                     "missing intent phrase"
                 );
                 errors.push(IntentError::MissingIntent { name: cap.name.clone() });
+            }
+        }
+    }
+}
+
+/// Validates application capability declarations and structured intent.
+fn check_application_capabilities(program: &IntentProgram, errors: &mut Vec<IntentError>) {
+    for app in &program.applications {
+        let mut cap_names = HashSet::new();
+        for cap in &app.capabilities {
+            if !cap_names.insert(&cap.name) {
+                tracing::warn!(name = %cap.name, "duplicate capability name in application");
+                errors.push(IntentError::DuplicateCapability { name: cap.name.clone() });
+            }
+        }
+
+        if !app.capabilities.is_empty() {
+            if app.intent.description.trim().is_empty() {
+                tracing::warn!(app = %app.name, "empty description in structured intent");
+                errors.push(IntentError::EmptyDescription);
+            }
+
+            if app.intent.properties.is_empty() {
+                tracing::warn!(app = %app.name, "no properties in structured intent");
+                errors.push(IntentError::NoProperties);
+            }
+
+            for prop in &app.intent.properties {
+                if !cap_names.contains(&prop.capability) {
+                    tracing::warn!(
+                        property = %prop.action,
+                        capability = %prop.capability,
+                        "property references undeclared capability"
+                    );
+                    errors.push(IntentError::UndefinedCapabilityRef {
+                        property: prop.action.clone(),
+                        capability: prop.capability.clone(),
+                    });
+                }
+            }
+
+            let referenced: HashSet<&str> = app.intent.properties.iter().map(|p| p.capability.as_str()).collect();
+            for cap in &app.capabilities {
+                if !referenced.contains(cap.name.as_str()) {
+                    tracing::warn!(name = %cap.name, "declared capability not referenced by any property");
+                    errors.push(IntentError::UnusedCapability { name: cap.name.clone() });
+                }
             }
         }
     }
@@ -450,6 +502,187 @@ mod tests {
         };
         let errors = validate(&prog);
         assert_eq!(errors.len(), 2, "unresolved type + missing intent");
+    }
+
+    #[test]
+    fn duplicate_app_capability_names() {
+        let prog = IntentProgram {
+            applications: vec![crate::ast::Application {
+                name: "app".to_owned(),
+                args: crate::ast::ArgsDef::default(),
+                capabilities: vec![
+                    crate::ast::CapabilityDef {
+                        name: "builtins".to_owned(),
+                        kind: crate::ast::CapabilityKind::Import { path: None },
+                    },
+                    crate::ast::CapabilityDef {
+                        name: "builtins".to_owned(),
+                        kind: crate::ast::CapabilityKind::Import { path: None },
+                    },
+                ],
+                environment: vec![],
+                intent: crate::ast::StructuredIntent {
+                    description: "test".to_owned(),
+                    properties: vec![crate::ast::Property {
+                        capability: "builtins".to_owned(),
+                        action: "print".to_owned(),
+                    }],
+                },
+            }],
+            types: vec![],
+            modules: vec![],
+        };
+        let errors = validate(&prog);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, IntentError::DuplicateCapability { .. })),
+            "expected DuplicateCapability, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn undefined_capability_ref_in_property() {
+        let prog = IntentProgram {
+            applications: vec![crate::ast::Application {
+                name: "app".to_owned(),
+                args: crate::ast::ArgsDef::default(),
+                capabilities: vec![crate::ast::CapabilityDef {
+                    name: "builtins".to_owned(),
+                    kind: crate::ast::CapabilityKind::Import { path: None },
+                }],
+                environment: vec![],
+                intent: crate::ast::StructuredIntent {
+                    description: "test".to_owned(),
+                    properties: vec![crate::ast::Property {
+                        capability: "nonexistent".to_owned(),
+                        action: "do something".to_owned(),
+                    }],
+                },
+            }],
+            types: vec![],
+            modules: vec![],
+        };
+        let errors = validate(&prog);
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                IntentError::UndefinedCapabilityRef { capability, .. }
+                if capability == "nonexistent"
+            )),
+            "expected UndefinedCapabilityRef, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn empty_description_error() {
+        let prog = IntentProgram {
+            applications: vec![crate::ast::Application {
+                name: "app".to_owned(),
+                args: crate::ast::ArgsDef::default(),
+                capabilities: vec![crate::ast::CapabilityDef {
+                    name: "builtins".to_owned(),
+                    kind: crate::ast::CapabilityKind::Import { path: None },
+                }],
+                environment: vec![],
+                intent: crate::ast::StructuredIntent {
+                    description: String::new(),
+                    properties: vec![crate::ast::Property {
+                        capability: "builtins".to_owned(),
+                        action: "print".to_owned(),
+                    }],
+                },
+            }],
+            types: vec![],
+            modules: vec![],
+        };
+        let errors = validate(&prog);
+        assert!(
+            errors.iter().any(|e| matches!(e, IntentError::EmptyDescription)),
+            "expected EmptyDescription, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn no_properties_error() {
+        let prog = IntentProgram {
+            applications: vec![crate::ast::Application {
+                name: "app".to_owned(),
+                args: crate::ast::ArgsDef::default(),
+                capabilities: vec![crate::ast::CapabilityDef {
+                    name: "builtins".to_owned(),
+                    kind: crate::ast::CapabilityKind::Import { path: None },
+                }],
+                environment: vec![],
+                intent: crate::ast::StructuredIntent {
+                    description: "test".to_owned(),
+                    properties: vec![],
+                },
+            }],
+            types: vec![],
+            modules: vec![],
+        };
+        let errors = validate(&prog);
+        assert!(
+            errors.iter().any(|e| matches!(e, IntentError::NoProperties)),
+            "expected NoProperties, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn unused_capability_warning() {
+        let prog = IntentProgram {
+            applications: vec![crate::ast::Application {
+                name: "app".to_owned(),
+                args: crate::ast::ArgsDef::default(),
+                capabilities: vec![
+                    crate::ast::CapabilityDef {
+                        name: "builtins".to_owned(),
+                        kind: crate::ast::CapabilityKind::Import { path: None },
+                    },
+                    crate::ast::CapabilityDef {
+                        name: "unused".to_owned(),
+                        kind: crate::ast::CapabilityKind::NewModule,
+                    },
+                ],
+                environment: vec![],
+                intent: crate::ast::StructuredIntent {
+                    description: "test".to_owned(),
+                    properties: vec![crate::ast::Property {
+                        capability: "builtins".to_owned(),
+                        action: "print".to_owned(),
+                    }],
+                },
+            }],
+            types: vec![],
+            modules: vec![],
+        };
+        let errors = validate(&prog);
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                IntentError::UnusedCapability { name }
+                if name == "unused"
+            )),
+            "expected UnusedCapability for 'unused', got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn valid_application_with_capabilities() {
+        let prog = parse_intent(
+            "\
+application weather:
+  capabilities:
+    builtins: import
+  intent:
+    description: fetch weather
+    properties:
+      - uses builtins to print output
+",
+        );
+        let errors = validate(&prog);
+        assert!(errors.is_empty(), "expected no errors, got {errors:?}");
     }
 
     // ---------------------------------------------------------------------------

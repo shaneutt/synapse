@@ -2,8 +2,8 @@ use std::mem::discriminant;
 
 use crate::{
     ast::{
-        Application, ArgsDef, Capability, EnvVar, Field, FlagDef, IntentProgram, Module, Param, Pipeline, PipelineStep,
-        PositionalDef, TypeDef,
+        Application, ArgsDef, Capability, CapabilityDef, CapabilityKind, EnvVar, Field, FlagDef, IntentProgram, Module,
+        Param, Pipeline, PipelineStep, PositionalDef, Property, RustCrateSpec, StructuredIntent, TypeDef,
     },
     error::IntentError,
     token::{Token, TokenKind},
@@ -90,7 +90,8 @@ impl<'t> Parser<'t> {
     // Application Section
     // ---------------------------------------------------------------------------
 
-    /// Parses an `application name:` block with args, environment, and intent.
+    /// Parses an `application name:` block with args, capabilities,
+    /// environment, and structured intent.
     fn parse_application(&mut self) -> Result<Application, IntentError> {
         self.expect(&TokenKind::Application)?;
         let (name, _) = self.expect_identifier()?;
@@ -99,8 +100,12 @@ impl<'t> Parser<'t> {
         self.expect(&TokenKind::Indent)?;
 
         let mut args = ArgsDef::default();
+        let mut capabilities = Vec::new();
         let mut environment = Vec::new();
-        let mut intent = String::new();
+        let mut intent = StructuredIntent {
+            description: String::new(),
+            properties: Vec::new(),
+        };
 
         while !self.at(&TokenKind::Dedent) && !self.at_eof() {
             self.skip_newlines();
@@ -112,17 +117,17 @@ impl<'t> Parser<'t> {
                 TokenKind::Args => {
                     args = self.parse_args_section()?;
                 },
+                TokenKind::Capabilities => {
+                    capabilities = self.parse_capabilities_section()?;
+                },
                 TokenKind::Environment => {
                     environment = self.parse_environment_section()?;
                 },
                 TokenKind::Intent => {
-                    self.advance();
-                    self.expect(&TokenKind::Colon)?;
-                    intent = self.expect_free_text()?;
-                    self.expect(&TokenKind::Newline)?;
+                    intent = self.parse_application_intent()?;
                 },
                 _ => {
-                    return Err(self.unexpected("'args', 'environment', or 'intent'"));
+                    return Err(self.unexpected("'args', 'capabilities', 'environment', or 'intent'"));
                 },
             }
         }
@@ -131,8 +136,219 @@ impl<'t> Parser<'t> {
         Ok(Application {
             name,
             args,
+            capabilities,
             environment,
             intent,
+        })
+    }
+
+    /// Parses the application `intent:` section. If the next token after
+    /// the colon is [`FreeText`], treats it as a legacy free-text intent
+    /// with no properties. Otherwise parses a structured block with
+    /// `description:` and `properties:`.
+    ///
+    /// [`FreeText`]: TokenKind::FreeText
+    fn parse_application_intent(&mut self) -> Result<StructuredIntent, IntentError> {
+        self.expect(&TokenKind::Intent)?;
+        self.expect(&TokenKind::Colon)?;
+
+        if self.at(&TokenKind::FreeText(String::new())) {
+            let text = self.expect_free_text()?;
+            self.expect(&TokenKind::Newline)?;
+            return Ok(StructuredIntent {
+                description: text,
+                properties: Vec::new(),
+            });
+        }
+
+        self.expect(&TokenKind::Newline)?;
+        self.expect(&TokenKind::Indent)?;
+
+        let mut description = String::new();
+        let mut properties = Vec::new();
+
+        while !self.at(&TokenKind::Dedent) && !self.at_eof() {
+            self.skip_newlines();
+            if self.at(&TokenKind::Dedent) || self.at_eof() {
+                break;
+            }
+
+            match &self.peek().kind {
+                TokenKind::Description => {
+                    self.advance();
+                    self.expect(&TokenKind::Colon)?;
+                    description = self.expect_free_text()?;
+                    self.expect(&TokenKind::Newline)?;
+                },
+                TokenKind::Properties => {
+                    properties = self.parse_properties_list()?;
+                },
+                _ => {
+                    return Err(self.unexpected("'description' or 'properties'"));
+                },
+            }
+        }
+
+        self.expect(&TokenKind::Dedent)?;
+        Ok(StructuredIntent {
+            description,
+            properties,
+        })
+    }
+
+    /// Parses the `properties:` list within a structured intent.
+    fn parse_properties_list(&mut self) -> Result<Vec<Property>, IntentError> {
+        self.expect(&TokenKind::Properties)?;
+        self.expect(&TokenKind::Colon)?;
+        self.expect(&TokenKind::Newline)?;
+        self.expect(&TokenKind::Indent)?;
+
+        let mut properties = Vec::new();
+
+        while !self.at(&TokenKind::Dedent) && !self.at_eof() {
+            self.skip_newlines();
+            if self.at(&TokenKind::Dedent) || self.at_eof() {
+                break;
+            }
+            properties.push(self.parse_property()?);
+        }
+
+        self.expect(&TokenKind::Dedent)?;
+        Ok(properties)
+    }
+
+    /// Parses a single property line: `- uses <capability> to <action>`.
+    fn parse_property(&mut self) -> Result<Property, IntentError> {
+        self.expect(&TokenKind::Dash)?;
+        self.expect(&TokenKind::Uses)?;
+        let capability = self.expect_any_word()?;
+
+        if self.at_identifier_matching("to") {
+            self.advance();
+        }
+
+        let mut action_parts = Vec::new();
+        while !self.at(&TokenKind::Newline) && !self.at_eof() {
+            let tok = self.advance();
+            match tok.kind {
+                TokenKind::Identifier(s) => action_parts.push(s),
+                other => action_parts.push(other.describe().trim_matches('\'').to_owned()),
+            }
+        }
+        self.expect(&TokenKind::Newline)?;
+
+        Ok(Property {
+            capability,
+            action: action_parts.join(" "),
+        })
+    }
+
+    /// Parses the `capabilities:` section.
+    fn parse_capabilities_section(&mut self) -> Result<Vec<CapabilityDef>, IntentError> {
+        self.expect(&TokenKind::Capabilities)?;
+        self.expect(&TokenKind::Colon)?;
+        self.expect(&TokenKind::Newline)?;
+        self.expect(&TokenKind::Indent)?;
+
+        let mut caps = Vec::new();
+
+        while !self.at(&TokenKind::Dedent) && !self.at_eof() {
+            self.skip_newlines();
+            if self.at(&TokenKind::Dedent) || self.at_eof() {
+                break;
+            }
+            caps.push(self.parse_capability_def()?);
+        }
+
+        self.expect(&TokenKind::Dedent)?;
+        Ok(caps)
+    }
+
+    /// Parses a single capability definition line:
+    /// `<name>: <kind_keywords> [args...]`.
+    fn parse_capability_def(&mut self) -> Result<CapabilityDef, IntentError> {
+        let name = self.expect_any_word()?;
+        self.expect(&TokenKind::Colon)?;
+
+        let kind = self.parse_capability_kind(&name)?;
+        self.expect(&TokenKind::Newline)?;
+
+        Ok(CapabilityDef { name, kind })
+    }
+
+    /// Parses the capability kind from keyword tokens.
+    ///
+    /// Supported forms:
+    /// - `import` -> bare import (resolved by name)
+    /// - `import <path>` -> import with explicit path
+    /// - `import rust crate <spec>` -> Rust crate import
+    /// - `new module` -> LLM-generated module
+    /// - `new crate` -> LLM-generated crate
+    fn parse_capability_kind(&mut self, cap_name: &str) -> Result<CapabilityKind, IntentError> {
+        match &self.peek().kind {
+            TokenKind::Import => {
+                self.advance();
+                if self.at(&TokenKind::Rust) {
+                    self.advance();
+                    self.expect(&TokenKind::Crate)?;
+                    let spec = self.parse_rust_crate_spec_inline(cap_name)?;
+                    Ok(CapabilityKind::ImportRustCrate { spec })
+                } else if self.at(&TokenKind::Newline) || self.at_eof() {
+                    Ok(CapabilityKind::Import { path: None })
+                } else {
+                    let path = self.expect_any_word()?;
+                    Ok(CapabilityKind::Import { path: Some(path) })
+                }
+            },
+            TokenKind::New => {
+                self.advance();
+                match &self.peek().kind {
+                    TokenKind::Module => {
+                        self.advance();
+                        Ok(CapabilityKind::NewModule)
+                    },
+                    TokenKind::Crate => {
+                        self.advance();
+                        Ok(CapabilityKind::NewCrate)
+                    },
+                    _ => Err(self.unexpected("'module' or 'crate'")),
+                }
+            },
+            _ => Err(self.unexpected("'import' or 'new'")),
+        }
+    }
+
+    /// Parses an inline Rust crate spec: `[<version>] [path <path>] [git <url>]`.
+    ///
+    /// The crate name is taken from the capability name.
+    fn parse_rust_crate_spec_inline(&mut self, cap_name: &str) -> Result<RustCrateSpec, IntentError> {
+        let mut version = None;
+        let mut path = None;
+        let mut git = None;
+
+        while !self.at(&TokenKind::Newline) && !self.at_eof() {
+            match &self.peek().kind {
+                TokenKind::Identifier(s) if s == "path" => {
+                    self.advance();
+                    path = Some(self.expect_any_word()?);
+                },
+                TokenKind::Identifier(s) if s == "git" => {
+                    self.advance();
+                    git = Some(self.expect_any_word()?);
+                },
+                TokenKind::Identifier(_) => {
+                    let (v, _) = self.expect_identifier()?;
+                    version = Some(v);
+                },
+                _ => break,
+            }
+        }
+
+        Ok(RustCrateSpec {
+            name: cap_name.to_owned(),
+            version,
+            path,
+            git,
         })
     }
 
@@ -557,6 +773,13 @@ impl<'t> Parser<'t> {
         matches!(self.peek().kind, TokenKind::Identifier(_))
     }
 
+    /// Returns `true` if the current token is an [`Identifier`] with the given value.
+    ///
+    /// [`Identifier`]: TokenKind::Identifier
+    fn at_identifier_matching(&self, value: &str) -> bool {
+        matches!(&self.peek().kind, TokenKind::Identifier(s) if s == value)
+    }
+
     /// Skips consecutive newline tokens.
     fn skip_newlines(&mut self) {
         while self.at(&TokenKind::Newline) {
@@ -584,6 +807,31 @@ impl<'t> Parser<'t> {
         let tok = self.advance();
         match tok.kind {
             TokenKind::Identifier(name) => Ok((name, tok.span.line)),
+            _ => Err(IntentError::Unexpected {
+                line: tok.span.line,
+                column: tok.span.column,
+                expected: "identifier".to_owned(),
+                found: tok.kind.to_string(),
+            }),
+        }
+    }
+
+    /// Consumes any word-like token (identifier or keyword used as a name)
+    /// and returns its string value.
+    fn expect_any_word(&mut self) -> Result<String, IntentError> {
+        let tok = self.advance();
+        match tok.kind {
+            TokenKind::Identifier(name) => Ok(name),
+            TokenKind::Module => Ok("module".to_owned()),
+            TokenKind::Crate => Ok("crate".to_owned()),
+            TokenKind::Rust => Ok("rust".to_owned()),
+            TokenKind::Import => Ok("import".to_owned()),
+            TokenKind::Input => Ok("input".to_owned()),
+            TokenKind::Output => Ok("output".to_owned()),
+            TokenKind::Default => Ok("default".to_owned()),
+            TokenKind::New => Ok("new".to_owned()),
+            TokenKind::Uses => Ok("uses".to_owned()),
+            TokenKind::From => Ok("from".to_owned()),
             _ => Err(IntentError::Unexpected {
                 line: tok.span.line,
                 column: tok.span.column,
@@ -755,11 +1003,16 @@ module math:
         assert_eq!(prog.applications.len(), 1, "one application");
         let app = &prog.applications[0];
         assert_eq!(app.name, "hello");
-        assert_eq!(app.intent, "print hello world to stdout");
+        assert_eq!(
+            app.intent.description, "print hello world to stdout",
+            "free-text intent becomes description"
+        );
+        assert!(app.intent.properties.is_empty(), "no properties in free-text intent");
         assert!(app.args.verb.is_none(), "no verb");
         assert!(app.args.flags.is_empty(), "no flags");
         assert!(app.args.positionals.is_empty(), "no positionals");
         assert!(app.environment.is_empty(), "no env vars");
+        assert!(app.capabilities.is_empty(), "no capabilities");
     }
 
     #[test]
@@ -866,7 +1119,7 @@ application client:
     }
 
     #[test]
-    fn parse_full_application() {
+    fn parse_full_application_free_text() {
         let source = "\
 application wordcount:
   args:
@@ -882,7 +1135,201 @@ application wordcount:
         assert_eq!(app.args.flags.len(), 1, "one flag");
         assert_eq!(app.args.positionals.len(), 1, "one positional");
         assert_eq!(app.environment.len(), 1, "one env var");
-        assert_eq!(app.intent, "read the file, count words, print the count");
+        assert_eq!(app.intent.description, "read the file, count words, print the count");
+    }
+
+    #[test]
+    fn parse_capabilities_import() {
+        let source = "\
+application weather:
+  capabilities:
+    builtins: import
+  intent:
+    description: fetch weather
+    properties:
+      - uses builtins to print output
+";
+        let prog = parse_ok(source);
+        let app = &prog.applications[0];
+        assert_eq!(app.capabilities.len(), 1, "one capability");
+        assert_eq!(app.capabilities[0].name, "builtins");
+        assert_eq!(
+            app.capabilities[0].kind,
+            CapabilityKind::Import { path: None },
+            "bare import kind"
+        );
+    }
+
+    #[test]
+    fn parse_capabilities_new_module() {
+        let source = "\
+application demo:
+  capabilities:
+    parser: new module
+  intent:
+    description: parse things
+    properties:
+      - uses parser to parse input
+";
+        let prog = parse_ok(source);
+        assert_eq!(app_cap_kind(&prog, 0), &CapabilityKind::NewModule);
+    }
+
+    #[test]
+    fn parse_capabilities_new_crate() {
+        let source = "\
+application demo:
+  capabilities:
+    engine: new crate
+  intent:
+    description: run engine
+    properties:
+      - uses engine to process data
+";
+        let prog = parse_ok(source);
+        assert_eq!(app_cap_kind(&prog, 0), &CapabilityKind::NewCrate);
+    }
+
+    #[test]
+    fn parse_capabilities_import_with_path() {
+        let source = "\
+application demo:
+  capabilities:
+    utils: import lib/utils.synapse
+  intent:
+    description: use utils
+    properties:
+      - uses utils to help
+";
+        let prog = parse_ok(source);
+        assert_eq!(
+            app_cap_kind(&prog, 0),
+            &CapabilityKind::Import {
+                path: Some("lib/utils.synapse".to_owned())
+            }
+        );
+    }
+
+    #[test]
+    fn parse_capabilities_import_rust_crate_version() {
+        let source = "\
+application demo:
+  capabilities:
+    serde_json: import rust crate 1.0.140
+  intent:
+    description: parse json
+    properties:
+      - uses serde_json to deserialize
+";
+        let prog = parse_ok(source);
+        assert_eq!(
+            app_cap_kind(&prog, 0),
+            &CapabilityKind::ImportRustCrate {
+                spec: RustCrateSpec {
+                    name: "serde_json".to_owned(),
+                    version: Some("1.0.140".to_owned()),
+                    path: None,
+                    git: None,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn parse_capabilities_import_rust_crate_path() {
+        let source = "\
+application demo:
+  capabilities:
+    mylib: import rust crate path ../mylib
+  intent:
+    description: use mylib
+    properties:
+      - uses mylib to do stuff
+";
+        let prog = parse_ok(source);
+        assert_eq!(
+            app_cap_kind(&prog, 0),
+            &CapabilityKind::ImportRustCrate {
+                spec: RustCrateSpec {
+                    name: "mylib".to_owned(),
+                    version: None,
+                    path: Some("../mylib".to_owned()),
+                    git: None,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn parse_structured_intent() {
+        let source = "\
+application weather:
+  capabilities:
+    builtins: import
+    http: import
+  intent:
+    description: fetch weather for a city and print it
+    properties:
+      - uses builtins to print output to stdout
+      - uses http to fetch data from wttr.in
+";
+        let prog = parse_ok(source);
+        let app = &prog.applications[0];
+        assert_eq!(app.intent.description, "fetch weather for a city and print it");
+        assert_eq!(app.intent.properties.len(), 2, "two properties");
+        assert_eq!(app.intent.properties[0].capability, "builtins");
+        assert_eq!(app.intent.properties[0].action, "print output to stdout");
+        assert_eq!(app.intent.properties[1].capability, "http");
+        assert_eq!(app.intent.properties[1].action, "fetch data from wttr.in");
+    }
+
+    #[test]
+    fn parse_full_application_with_capabilities() {
+        let source = "\
+application weather:
+  args:
+    positional: city String
+  capabilities:
+    builtins: import
+  intent:
+    description: fetch weather and print it
+    properties:
+      - uses builtins to fetch weather data via http_get
+      - uses builtins to build the URL via concat
+      - uses builtins to print the result
+";
+        let prog = parse_ok(source);
+        let app = &prog.applications[0];
+        assert_eq!(app.name, "weather");
+        assert_eq!(app.args.positionals.len(), 1, "one positional");
+        assert_eq!(app.capabilities.len(), 1, "one capability");
+        assert_eq!(app.intent.description, "fetch weather and print it");
+        assert_eq!(app.intent.properties.len(), 3, "three properties");
+    }
+
+    #[test]
+    fn parse_multiple_capability_kinds() {
+        let source = "\
+application demo:
+  capabilities:
+    builtins: import
+    parser: new module
+    engine: new crate
+    utils: import lib/utils.synapse
+    serde_json: import rust crate 1.0.140
+  intent:
+    description: do everything
+    properties:
+      - uses builtins to print
+      - uses parser to parse
+      - uses engine to run
+      - uses utils to help
+      - uses serde_json to serialize
+";
+        let prog = parse_ok(source);
+        let app = &prog.applications[0];
+        assert_eq!(app.capabilities.len(), 5, "five capabilities");
+        assert_eq!(app.intent.properties.len(), 5, "five properties");
     }
 
     // ---------------------------------------------------------------------------
@@ -899,5 +1346,10 @@ application wordcount:
     fn parse_err(source: &str) -> IntentError {
         let tokens = lex(source).unwrap();
         parse(&tokens).unwrap_err()
+    }
+
+    /// Returns the capability kind for the nth capability in the first application.
+    fn app_cap_kind(prog: &IntentProgram, n: usize) -> &CapabilityKind {
+        &prog.applications[0].capabilities[n].kind
     }
 }

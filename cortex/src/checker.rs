@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    ast::{self, BinOp, Pattern, Type},
+    ast::{self, BinOp, Import, Pattern, Type},
     error::TypeError,
+    module::ModuleMap,
     token::Span,
     typed_ast::{
         TypedDeclaration, TypedExpr, TypedExprKind, TypedFunction, TypedMatchArm, TypedParam, TypedProgram,
@@ -28,7 +29,51 @@ use crate::{
 /// [`TypedProgram`]: crate::typed_ast::TypedProgram
 /// [`TypeError`]: crate::error::TypeError
 pub fn check(program: &ast::Program) -> Result<TypedProgram, TypeError> {
-    Checker::new().check_program(program)
+    check_with_modules(program, &HashMap::new())
+}
+
+/// Type-checks a program with knowledge of external module APIs.
+///
+/// Qualified calls (`module.function(args)`) are resolved against the
+/// provided [`ModuleMap`]. Modules referenced by `import` statements
+/// must appear in the map or an error is returned.
+///
+/// # Errors
+///
+/// Returns [`TypeError`] if type-checking fails, including
+/// [`UnknownModule`], [`UnknownModuleFunction`], or
+/// [`ModuleVisibility`] for invalid cross-module references.
+///
+/// ```
+/// # use std::collections::HashMap;
+/// # use cortex::{lexer::lex, parser::parse, checker::check_with_modules};
+/// # use cortex::module::{ModuleApi, FunctionSig};
+/// # use cortex::ast::Type;
+/// let mut modules = HashMap::new();
+/// modules.insert(
+///     "math".to_owned(),
+///     ModuleApi {
+///         name: "math".to_owned(),
+///         functions: vec![FunctionSig {
+///             name: "add".to_owned(),
+///             params: vec![("a".to_owned(), Type::Int), ("b".to_owned(), Type::Int)],
+///             return_type: Type::Int,
+///         }],
+///     },
+/// );
+/// let src = "import math\nfunction f() -> Int\n  returns math.add(1, 2)\n";
+/// let tokens = lex(src).unwrap();
+/// let ast = parse(&tokens).unwrap();
+/// let typed = check_with_modules(&ast, &modules).unwrap();
+/// assert_eq!(typed.declarations.len(), 1);
+/// ```
+///
+/// [`ModuleMap`]: crate::module::ModuleMap
+/// [`UnknownModule`]: crate::error::TypeError::UnknownModule
+/// [`UnknownModuleFunction`]: crate::error::TypeError::UnknownModuleFunction
+/// [`ModuleVisibility`]: crate::error::TypeError::ModuleVisibility
+pub fn check_with_modules(program: &ast::Program, modules: &ModuleMap) -> Result<TypedProgram, TypeError> {
+    Checker::new(modules.clone()).check_program(program)
 }
 
 // ---------------------------------------------------------------------------
@@ -94,12 +139,17 @@ impl TypeEnv {
 struct Checker {
     /// The type environment with scopes and function signatures.
     env: TypeEnv,
+    /// Available external module APIs for cross-module resolution.
+    modules: ModuleMap,
 }
 
 impl Checker {
-    /// Creates a new checker with an empty environment.
-    fn new() -> Self {
-        Self { env: TypeEnv::new() }
+    /// Creates a new checker with the given module map.
+    fn new(modules: ModuleMap) -> Self {
+        Self {
+            env: TypeEnv::new(),
+            modules,
+        }
     }
 
     /// Registers built-in function signatures (print, `http_get`, concat).
@@ -129,7 +179,12 @@ impl Checker {
 
     /// Checks a complete program (two-pass: register signatures, then check bodies).
     fn check_program(&mut self, program: &ast::Program) -> Result<TypedProgram, TypeError> {
-        self.register_builtins();
+        let has_builtins = program.imports.iter().any(|i| matches!(i, Import::Builtins));
+        if has_builtins {
+            self.register_builtins();
+        }
+
+        self.validate_module_imports(program)?;
 
         for decl in &program.declarations {
             if let ast::Declaration::Function(f) = decl {
@@ -151,7 +206,10 @@ impl Checker {
         for decl in &program.declarations {
             declarations.push(self.check_declaration(decl)?);
         }
-        Ok(TypedProgram { declarations })
+        Ok(TypedProgram {
+            declarations,
+            imports: program.imports.clone(),
+        })
     }
 
     /// Checks a single declaration.
@@ -196,6 +254,7 @@ impl Checker {
         Ok(TypedFunction {
             name: func.name.clone(),
             body,
+            is_public: func.is_public,
             params,
             return_type: func.return_type.clone(),
             span: func.span,
@@ -209,6 +268,7 @@ impl Checker {
         self.env.define(decl.name.clone(), ty.clone());
         Ok(TypedValueDecl {
             name: decl.name.clone(),
+            is_public: decl.is_public,
             span: decl.span,
             ty,
             value,
@@ -224,6 +284,7 @@ impl Checker {
                 self.env.define(v.name.clone(), ty.clone());
                 Ok(TypedStatement::Value(TypedValueDecl {
                     name: v.name.clone(),
+                    is_public: v.is_public,
                     span: v.span,
                     ty,
                     value,
@@ -280,6 +341,12 @@ impl Checker {
                 })
             },
             ast::Expression::Call(name, args, span) => self.check_call(name, args, *span),
+            ast::Expression::QualifiedCall(module, name, args, span) => {
+                self.check_qualified_call(module, name, args, *span)
+            },
+            ast::Expression::QualifiedIdentifier(module, name, span) => {
+                self.check_qualified_identifier(module, name, *span)
+            },
             ast::Expression::Match(scrutinee, arms, span) => self.check_match(scrutinee, arms, *span, expected),
             ast::Expression::Cons(head, tail, span) => self.check_cons(head, tail, *span),
             ast::Expression::Nil(span) => {
@@ -328,6 +395,104 @@ impl Checker {
             kind: TypedExprKind::Call(name.to_owned(), typed_args),
             span,
             ty: sig.return_type,
+        })
+    }
+
+    /// Validates that all synapse module imports reference known modules.
+    fn validate_module_imports(&self, program: &ast::Program) -> Result<(), TypeError> {
+        for import in &program.imports {
+            if let Import::SynapseModule(name) = import {
+                if !self.modules.contains_key(name) {
+                    return Err(TypeError::UnknownModule {
+                        span: Span {
+                            line: 1,
+                            column: 1,
+                            length: 0,
+                        },
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks a qualified function call (e.g., `builtins.print(x)` or `math.factorial(10)`).
+    fn check_qualified_call(
+        &mut self,
+        module: &str,
+        name: &str,
+        args: &[ast::Expression],
+        span: Span,
+    ) -> Result<TypedExpr, TypeError> {
+        if module == "builtins" {
+            let result = self.check_call(name, args, span)?;
+            return Ok(TypedExpr {
+                kind: TypedExprKind::QualifiedCall(
+                    module.to_owned(),
+                    name.to_owned(),
+                    match result.kind {
+                        TypedExprKind::Call(_, a) => a,
+                        _ => Vec::new(),
+                    },
+                ),
+                span,
+                ty: result.ty,
+            });
+        }
+
+        let api = self.modules.get(module).ok_or_else(|| TypeError::UnknownModule {
+            span,
+            name: module.to_owned(),
+        })?;
+
+        let sig = api
+            .functions
+            .iter()
+            .find(|f| f.name == name)
+            .ok_or_else(|| TypeError::UnknownModuleFunction {
+                span,
+                module: module.to_owned(),
+                function: name.to_owned(),
+            })?;
+
+        let param_types: Vec<Type> = sig.params.iter().map(|(_, ty)| ty.clone()).collect();
+        let return_type = sig.return_type.clone();
+
+        if args.len() != param_types.len() {
+            return Err(TypeError::ArgCount {
+                span,
+                name: format!("{module}.{name}"),
+                expected: param_types.len(),
+                found: args.len(),
+            });
+        }
+
+        let mut typed_args = Vec::new();
+        for (arg, param_ty) in args.iter().zip(&param_types) {
+            let typed = self.check_expr(arg, Some(param_ty))?;
+            Self::expect_type(&typed.ty, param_ty, typed.span)?;
+            typed_args.push(typed);
+        }
+
+        Ok(TypedExpr {
+            kind: TypedExprKind::QualifiedCall(module.to_owned(), name.to_owned(), typed_args),
+            span,
+            ty: return_type,
+        })
+    }
+
+    /// Checks a qualified identifier (e.g., `module.name`).
+    fn check_qualified_identifier(&self, module: &str, name: &str, span: Span) -> Result<TypedExpr, TypeError> {
+        if self.modules.contains_key(module) {
+            return Err(TypeError::UndefinedVar {
+                span,
+                name: format!("{module}.{name}"),
+            });
+        }
+        Err(TypeError::UndefinedVar {
+            span,
+            name: format!("{module}.{name}"),
         })
     }
 
@@ -478,6 +643,7 @@ impl Checker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::module::ModuleApi;
 
     #[test]
     fn well_typed_factorial() {
@@ -536,6 +702,153 @@ mod tests {
     fn duplicate_function() {
         let err = check_err("function f() -> Int\n  returns 1\nfunction f() -> Int\n  returns 2\n");
         assert!(matches!(err, TypeError::DuplicateFn { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn builtins_available_with_import() {
+        check_ok("import builtins\nfunction f() -> Int\n  returns print(\"hello\")\n");
+    }
+
+    #[test]
+    fn builtins_unavailable_without_import() {
+        let err = check_err("function f() -> Int\n  returns print(\"hello\")\n");
+        assert!(matches!(err, TypeError::UndefinedFn { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn qualified_builtin_call() {
+        check_ok("import builtins\nfunction f() -> Int\n  returns builtins.print(\"hello\")\n");
+    }
+
+    #[test]
+    fn qualified_call_unknown_module() {
+        let err = check_err("import builtins\nfunction f() -> Int\n  returns unknown.foo()\n");
+        assert!(
+            matches!(err, TypeError::UnknownModule { ref name, .. } if name == "unknown"),
+            "expected UnknownModule, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn is_public_propagated() {
+        let typed = check_ok("pub function f() -> Int\n  returns 42\n");
+        let TypedDeclaration::Function(f) = &typed.declarations[0] else {
+            panic!("expected function");
+        };
+        assert!(f.is_public, "should be public");
+    }
+
+    #[test]
+    fn imports_propagated() {
+        let typed = check_ok("import builtins\nfunction f() -> Int\n  returns 42\n");
+        assert_eq!(typed.imports.len(), 1, "one import");
+        assert!(matches!(typed.imports[0], Import::Builtins));
+    }
+
+    #[test]
+    fn check_with_modules_resolves_qualified_call() {
+        let mut modules = HashMap::new();
+        modules.insert(
+            "math".to_owned(),
+            ModuleApi {
+                name: "math".to_owned(),
+                functions: vec![crate::module::FunctionSig {
+                    name: "factorial".to_owned(),
+                    params: vec![("n".to_owned(), Type::Int)],
+                    return_type: Type::Int,
+                }],
+            },
+        );
+
+        let source = "import math\nfunction f() -> Int\n  returns math.factorial(5)\n";
+        let tokens = crate::lexer::lex(source).unwrap();
+        let ast = crate::parser::parse(&tokens).unwrap();
+        let typed = check_with_modules(&ast, &modules).unwrap();
+        assert_eq!(typed.declarations.len(), 1);
+    }
+
+    #[test]
+    fn check_with_modules_rejects_unknown_module() {
+        let source = "import unknown\nfunction f() -> Int\n  returns unknown.foo()\n";
+        let tokens = crate::lexer::lex(source).unwrap();
+        let ast = crate::parser::parse(&tokens).unwrap();
+        let err = check_with_modules(&ast, &HashMap::new()).unwrap_err();
+        assert!(
+            matches!(err, TypeError::UnknownModule { ref name, .. } if name == "unknown"),
+            "expected UnknownModule, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_with_modules_rejects_unknown_function() {
+        let mut modules = HashMap::new();
+        modules.insert(
+            "math".to_owned(),
+            ModuleApi {
+                name: "math".to_owned(),
+                functions: vec![],
+            },
+        );
+
+        let source = "import math\nfunction f() -> Int\n  returns math.nonexistent()\n";
+        let tokens = crate::lexer::lex(source).unwrap();
+        let ast = crate::parser::parse(&tokens).unwrap();
+        let err = check_with_modules(&ast, &modules).unwrap_err();
+        assert!(
+            matches!(err, TypeError::UnknownModuleFunction { ref module, ref function, .. }
+                if module == "math" && function == "nonexistent"),
+            "expected UnknownModuleFunction, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_with_modules_type_mismatch_on_args() {
+        let mut modules = HashMap::new();
+        modules.insert(
+            "math".to_owned(),
+            ModuleApi {
+                name: "math".to_owned(),
+                functions: vec![crate::module::FunctionSig {
+                    name: "add".to_owned(),
+                    params: vec![("a".to_owned(), Type::Int), ("b".to_owned(), Type::Int)],
+                    return_type: Type::Int,
+                }],
+            },
+        );
+
+        let source = "import math\nfunction f() -> Int\n  returns math.add(1, true)\n";
+        let tokens = crate::lexer::lex(source).unwrap();
+        let ast = crate::parser::parse(&tokens).unwrap();
+        let err = check_with_modules(&ast, &modules).unwrap_err();
+        assert!(
+            matches!(err, TypeError::Mismatch { .. }),
+            "expected Mismatch, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_with_modules_wrong_arg_count() {
+        let mut modules = HashMap::new();
+        modules.insert(
+            "math".to_owned(),
+            ModuleApi {
+                name: "math".to_owned(),
+                functions: vec![crate::module::FunctionSig {
+                    name: "add".to_owned(),
+                    params: vec![("a".to_owned(), Type::Int), ("b".to_owned(), Type::Int)],
+                    return_type: Type::Int,
+                }],
+            },
+        );
+
+        let source = "import math\nfunction f() -> Int\n  returns math.add(1)\n";
+        let tokens = crate::lexer::lex(source).unwrap();
+        let ast = crate::parser::parse(&tokens).unwrap();
+        let err = check_with_modules(&ast, &modules).unwrap_err();
+        assert!(
+            matches!(err, TypeError::ArgCount { .. }),
+            "expected ArgCount, got {err:?}"
+        );
     }
 
     // ---------------------------------------------------------------------------

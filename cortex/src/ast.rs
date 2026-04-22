@@ -6,12 +6,30 @@ use crate::token::Span;
 // Public API
 // ---------------------------------------------------------------------------
 
+/// A module import declaration.
+///
+/// ```
+/// # use cortex::ast::Import;
+/// let imp = Import::Builtins;
+/// assert!(matches!(imp, Import::Builtins));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Import {
+    /// `import builtins`: import built-in functions.
+    Builtins,
+    /// `import rust <crate>`: import a Rust crate dependency.
+    RustCrate(String),
+    /// `import <name>`: import another Synapse module.
+    SynapseModule(String),
+}
+
 /// A complete Synapse program.
 ///
 /// ```
 /// # use cortex::ast::Program;
 /// let prog = Program {
 ///     declarations: vec![],
+///     imports: vec![],
 /// };
 /// assert!(prog.declarations.is_empty());
 /// ```
@@ -19,6 +37,8 @@ use crate::token::Span;
 pub struct Program {
     /// Top-level declarations in source order.
     pub declarations: Vec<Declaration>,
+    /// Import statements in source order.
+    pub imports: Vec<Import>,
 }
 
 /// A top-level declaration.
@@ -35,31 +55,25 @@ pub enum Declaration {
 /// ```
 /// # use cortex::ast::{Function, Param, Statement, Expression, Type};
 /// # use cortex::token::Span;
+/// let s = Span {
+///     line: 1,
+///     column: 1,
+///     length: 1,
+/// };
 /// let f = Function {
 ///     name: "id".to_owned(),
 ///     body: vec![Statement::Returns(Expression::Identifier(
 ///         "x".to_owned(),
-///         Span {
-///             line: 1,
-///             column: 1,
-///             length: 1,
-///         },
+///         s,
 ///     ))],
+///     is_public: false,
 ///     params: vec![Param {
 ///         name: "x".to_owned(),
-///         span: Span {
-///             line: 1,
-///             column: 1,
-///             length: 1,
-///         },
+///         span: s,
 ///         ty: Type::Int,
 ///     }],
 ///     return_type: Type::Int,
-///     span: Span {
-///         line: 1,
-///         column: 1,
-///         length: 1,
-///     },
+///     span: s,
 /// };
 /// assert_eq!(f.name, "id");
 /// ```
@@ -69,6 +83,8 @@ pub struct Function {
     pub name: String,
     /// Statements in the function body.
     pub body: Vec<Statement>,
+    /// Whether this function is declared `pub`.
+    pub is_public: bool,
     /// Typed parameters.
     pub params: Vec<Param>,
     /// Declared return type.
@@ -132,6 +148,8 @@ pub enum Statement {
 pub struct ValueDecl {
     /// The bound name.
     pub name: String,
+    /// Whether this value is declared `pub`.
+    pub is_public: bool,
     /// Source location of the `value` keyword.
     pub span: Span,
     /// The bound expression.
@@ -155,6 +173,10 @@ pub enum Expression {
     Call(String, Vec<Expression>, Span),
     /// Match expression with arms.
     Match(Box<Expression>, Vec<MatchArm>, Span),
+    /// Qualified function call (`module.function(args)`).
+    QualifiedCall(String, String, Vec<Expression>, Span),
+    /// Qualified identifier (`module.name`).
+    QualifiedIdentifier(String, String, Span),
     /// List constructor (`Cons(head, tail)`).
     Cons(Box<Expression>, Box<Expression>, Span),
     /// Empty list.
@@ -174,6 +196,8 @@ impl Expression {
             | Self::Nil(s)
             | Self::BinaryOp(_, _, _, s)
             | Self::Call(_, _, s)
+            | Self::QualifiedCall(_, _, _, s)
+            | Self::QualifiedIdentifier(_, _, s)
             | Self::Match(_, _, s)
             | Self::Cons(_, _, s) => *s,
         }

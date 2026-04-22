@@ -1,7 +1,9 @@
 use std::mem::discriminant;
 
 use crate::{
-    ast::{BinOp, Declaration, Expression, Function, MatchArm, Param, Pattern, Program, Statement, Type, ValueDecl},
+    ast::{
+        BinOp, Declaration, Expression, Function, Import, MatchArm, Param, Pattern, Program, Statement, Type, ValueDecl,
+    },
     error::ParseError,
     token::{Span, Token, TokenKind},
 };
@@ -47,8 +49,9 @@ impl<'t> Parser<'t> {
     // Top-Level
     // ---------------------------------------------------------------------------
 
-    /// Parses a complete program (one or more declarations).
+    /// Parses a complete program (imports followed by declarations).
     fn parse_program(&mut self) -> Result<Program, ParseError> {
+        let imports = self.parse_imports()?;
         let mut declarations = Vec::new();
         while !self.at_eof() {
             declarations.push(self.parse_declaration()?);
@@ -56,20 +59,54 @@ impl<'t> Parser<'t> {
         if declarations.is_empty() {
             return Err(self.unexpected("declaration"));
         }
-        Ok(Program { declarations })
+        Ok(Program { declarations, imports })
     }
 
-    /// Parses a single declaration (function or top-level value).
+    /// Parses zero or more `import` statements at the top of a program.
+    fn parse_imports(&mut self) -> Result<Vec<Import>, ParseError> {
+        let mut imports = Vec::new();
+        while self.at(&TokenKind::Import) {
+            imports.push(self.parse_import()?);
+        }
+        Ok(imports)
+    }
+
+    /// Parses a single `import` statement.
+    fn parse_import(&mut self) -> Result<Import, ParseError> {
+        self.expect(&TokenKind::Import)?;
+        let import = if self.at(&TokenKind::Builtins) {
+            self.advance();
+            Import::Builtins
+        } else if self.at(&TokenKind::Rust) {
+            self.advance();
+            let (name, _) = self.expect_identifier()?;
+            Import::RustCrate(name)
+        } else {
+            let (name, _) = self.expect_identifier()?;
+            Import::SynapseModule(name)
+        };
+        self.expect_statement_end()?;
+        Ok(import)
+    }
+
+    /// Parses a single declaration (function or top-level value), with optional `pub`.
     fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
+        let is_public = if self.at(&TokenKind::Pub) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         match self.peek().kind {
-            TokenKind::Function => self.parse_function().map(Declaration::Function),
-            TokenKind::Value => self.parse_value_decl().map(Declaration::Value),
+            TokenKind::Function => self.parse_function(is_public).map(Declaration::Function),
+            TokenKind::Value => self.parse_value_decl_with_vis(is_public).map(Declaration::Value),
             _ => Err(self.unexpected("'function' or 'value'")),
         }
     }
 
     /// Parses a function declaration.
-    fn parse_function(&mut self) -> Result<Function, ParseError> {
+    fn parse_function(&mut self, is_public: bool) -> Result<Function, ParseError> {
         let span = self.expect(&TokenKind::Function)?.span;
         let (name, _) = self.expect_identifier()?;
         self.expect(&TokenKind::OpenParen)?;
@@ -84,6 +121,7 @@ impl<'t> Parser<'t> {
         Ok(Function {
             name,
             body,
+            is_public,
             params,
             return_type,
             span,
@@ -156,14 +194,24 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// Parses a value binding.
-    fn parse_value_decl(&mut self) -> Result<ValueDecl, ParseError> {
+    /// Parses a top-level value binding with visibility.
+    fn parse_value_decl_with_vis(&mut self, is_public: bool) -> Result<ValueDecl, ParseError> {
         let span = self.expect(&TokenKind::Value)?.span;
         let (name, _) = self.expect_identifier()?;
         self.expect(&TokenKind::Equals)?;
         let value = self.parse_expression()?;
         self.expect_statement_end()?;
-        Ok(ValueDecl { name, span, value })
+        Ok(ValueDecl {
+            name,
+            is_public,
+            span,
+            value,
+        })
+    }
+
+    /// Parses a local value binding (always private).
+    fn parse_value_decl(&mut self) -> Result<ValueDecl, ParseError> {
+        self.parse_value_decl_with_vis(false)
     }
 
     /// Parses a returns statement.
@@ -261,12 +309,65 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// Parses a unary expression (call or atom).
-    fn parse_unary_expr(&mut self) -> Result<Expression, ParseError> {
-        let is_call = matches!(self.peek().kind, TokenKind::Identifier(_))
-            && self.peek_at(1).is_some_and(|t| matches!(t.kind, TokenKind::OpenParen));
+    /// Returns `true` if the current token is an identifier or a module-name keyword.
+    fn at_module_name(&self) -> bool {
+        matches!(
+            self.peek().kind,
+            TokenKind::Identifier(_) | TokenKind::Builtins | TokenKind::Rust
+        )
+    }
 
-        if is_call { self.parse_call() } else { self.parse_atom() }
+    /// Consumes a module name token (identifier or module keyword) and returns the name and span.
+    fn expect_module_name(&mut self) -> Result<(String, Span), ParseError> {
+        let tok = self.peek();
+        match &tok.kind {
+            TokenKind::Builtins => {
+                let span = tok.span;
+                self.advance();
+                Ok(("builtins".to_owned(), span))
+            },
+            TokenKind::Rust => {
+                let span = tok.span;
+                self.advance();
+                Ok(("rust".to_owned(), span))
+            },
+            _ => self.expect_identifier(),
+        }
+    }
+
+    /// Parses a unary expression (call, qualified call, or atom).
+    fn parse_unary_expr(&mut self) -> Result<Expression, ParseError> {
+        let is_module_prefix =
+            self.at_module_name() && self.peek_at(1).is_some_and(|t| matches!(t.kind, TokenKind::Dot));
+        if is_module_prefix {
+            return self.parse_qualified();
+        }
+
+        let is_ident = matches!(self.peek().kind, TokenKind::Identifier(_));
+        if is_ident {
+            let is_call = self.peek_at(1).is_some_and(|t| matches!(t.kind, TokenKind::OpenParen));
+            if is_call {
+                return self.parse_call();
+            }
+        }
+
+        self.parse_atom()
+    }
+
+    /// Parses a qualified identifier or qualified call (`module.name` or `module.func(args)`).
+    fn parse_qualified(&mut self) -> Result<Expression, ParseError> {
+        let (module, span) = self.expect_module_name()?;
+        self.expect(&TokenKind::Dot)?;
+        let (name, _) = self.expect_identifier()?;
+
+        if self.at(&TokenKind::OpenParen) {
+            self.advance();
+            let args = self.parse_arguments()?;
+            self.expect(&TokenKind::CloseParen)?;
+            Ok(Expression::QualifiedCall(module, name, args, span))
+        } else {
+            Ok(Expression::QualifiedIdentifier(module, name, span))
+        }
     }
 
     /// Parses a function call.
@@ -573,6 +674,99 @@ mod tests {
         let source = "function a() -> Int\n  returns 1\nfunction b() -> Int\n  returns 2\n";
         let prog = parse_ok(source);
         assert_eq!(prog.declarations.len(), 2, "two functions");
+    }
+
+    #[test]
+    fn import_builtins() {
+        let prog = parse_ok("import builtins\nfunction f() -> Int\n  returns 42\n");
+        assert_eq!(prog.imports.len(), 1, "one import");
+        assert_eq!(prog.imports[0], Import::Builtins);
+    }
+
+    #[test]
+    fn import_rust_crate() {
+        let prog = parse_ok("import rust serde_json\nfunction f() -> Int\n  returns 42\n");
+        assert_eq!(prog.imports.len(), 1, "one import");
+        assert_eq!(prog.imports[0], Import::RustCrate("serde_json".to_owned()));
+    }
+
+    #[test]
+    fn import_synapse_module() {
+        let prog = parse_ok("import math\nfunction f() -> Int\n  returns 42\n");
+        assert_eq!(prog.imports.len(), 1, "one import");
+        assert_eq!(prog.imports[0], Import::SynapseModule("math".to_owned()));
+    }
+
+    #[test]
+    fn multiple_imports() {
+        let prog = parse_ok("import builtins\nimport math\nfunction f() -> Int\n  returns 42\n");
+        assert_eq!(prog.imports.len(), 2, "two imports");
+        assert_eq!(prog.imports[0], Import::Builtins);
+        assert_eq!(prog.imports[1], Import::SynapseModule("math".to_owned()));
+    }
+
+    #[test]
+    fn no_imports() {
+        let prog = parse_ok("function f() -> Int\n  returns 42\n");
+        assert!(prog.imports.is_empty(), "no imports");
+    }
+
+    #[test]
+    fn pub_function() {
+        let prog = parse_ok("pub function f() -> Int\n  returns 42\n");
+        let Declaration::Function(f) = &prog.declarations[0] else {
+            panic!("expected function");
+        };
+        assert!(f.is_public, "should be public");
+    }
+
+    #[test]
+    fn private_function_default() {
+        let prog = parse_ok("function f() -> Int\n  returns 42\n");
+        let Declaration::Function(f) = &prog.declarations[0] else {
+            panic!("expected function");
+        };
+        assert!(!f.is_public, "should default to private");
+    }
+
+    #[test]
+    fn pub_value() {
+        let prog = parse_ok("pub value x = 42\nfunction f() -> Int\n  returns 42\n");
+        let Declaration::Value(v) = &prog.declarations[0] else {
+            panic!("expected value");
+        };
+        assert!(v.is_public, "value should be public");
+    }
+
+    #[test]
+    fn qualified_call() {
+        let prog = parse_ok("import builtins\nfunction f() -> Int\n  returns builtins.print(\"hello\")\n");
+        let Declaration::Function(f) = &prog.declarations[0] else {
+            panic!("expected function");
+        };
+        let Statement::Returns(ref expr) = f.body[0] else {
+            panic!("expected returns");
+        };
+        assert!(
+            matches!(expr, Expression::QualifiedCall(m, n, _, _) if m == "builtins" && n == "print"),
+            "expected qualified call, got {expr:?}"
+        );
+    }
+
+    #[test]
+    fn qualified_identifier() {
+        let prog = parse_ok("import math\nfunction f() -> Int\n  value x = math.pi\n  returns 42\n");
+        let Declaration::Function(f) = &prog.declarations[0] else {
+            panic!("expected function");
+        };
+        let Statement::Value(ref v) = f.body[0] else {
+            panic!("expected value");
+        };
+        assert!(
+            matches!(&v.value, Expression::QualifiedIdentifier(m, n, _) if m == "math" && n == "pi"),
+            "expected qualified identifier, got {:?}",
+            v.value
+        );
     }
 
     #[test]

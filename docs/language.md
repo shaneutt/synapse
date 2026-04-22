@@ -6,6 +6,57 @@ Synapse is a purely functional language that transpiles to
 Rust. Programs consist of function declarations. The entry
 point is a function named `main`.
 
+## Imports
+
+Programs can import modules and built-in functions at
+the top of the file, before any declarations.
+
+```synapse
+import builtins
+import math
+import rust serde_json
+```
+
+Three forms are supported:
+
+| Form | Meaning |
+|------|---------|
+| `import builtins` | Make built-in functions available |
+| `import <name>` | Import a Synapse module |
+| `import rust <crate>` | Import a Rust crate |
+
+Built-in functions (`print`, `http_get`, `concat`) are
+only available when `import builtins` is present.
+
+Imported modules are accessed via qualified names:
+
+```synapse
+import builtins
+
+pub function main() -> Int
+  value _ = builtins.print("hello")
+  returns 0
+```
+
+## Visibility
+
+Declarations can be prefixed with `pub` to make them
+visible to other modules.
+
+```synapse
+pub function factorial(Int n) -> Int
+  returns match n
+    when 0 -> 1
+    otherwise -> n * factorial(n - 1)
+
+function helper(Int x) -> Int
+  returns x + 1
+```
+
+Without `pub`, declarations are module-private. The
+`main` function is always accessible regardless of
+visibility.
+
 ## Types
 
 | Type | Description |
@@ -99,6 +150,9 @@ match xs
 
 ## Built-in Functions
 
+Built-in functions require `import builtins` at the top
+of the file.
+
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `print` | `(String) -> Int` | Print to stdout, returns 0 |
@@ -106,6 +160,8 @@ match xs
 | `concat` | `(String, String) -> String` | Concatenate two strings |
 
 ```synapse
+import builtins
+
 value url = concat("https://example.com/", path)
 value body = http_get(url)
 value _ = print(body)
