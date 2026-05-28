@@ -8,7 +8,8 @@ Synapse is a functional programming language inspired by
 Erlang which transpiles to Rust. It follows a two-layer
 pipeline approach which uses Large Language Models (LLMs)
 to transpile a high level `intent` language into the
-functional `synapse` language.
+functional `synapse` language. The `synapse` language
+itself is a functional facade on top of Rust.
 
 Synapse is experimental; the purpose is to validate
 whether a high-level programming language integrated
